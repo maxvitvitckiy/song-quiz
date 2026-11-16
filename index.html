@@ -72,6 +72,11 @@
         <div class="card stage">
           <div class="round-info">
             <span id="roundLabel">Round 1</span>
+            <label class="volume" title="Volume">
+              <span id="volIcon">🔊</span>
+              <input id="volume" type="range" min="0" max="100" value="80" aria-label="Volume" />
+              <span id="volNote" class="muted small hidden">Use your phone's volume buttons</span>
+            </label>
             <span id="pointsLabel" class="pill">4 pts</span>
           </div>
 
@@ -115,10 +120,11 @@
           </div>
 
           <div class="controls hidden" id="awardControls">
+            <p class="solo-msg win">✓ Correct!</p>
             <p class="muted small">Who got it? <span id="awardPts"></span></p>
             <div id="awardButtons" class="award"></div>
             <div class="row center">
-              <button id="nobodyBtn" class="btn ghost">Nobody</button>
+              <button id="nobodyBtn" class="btn ghost">Skip song</button>
               <button id="replayFullBtn" class="btn ghost">▶ Play preview</button>
             </div>
           </div>

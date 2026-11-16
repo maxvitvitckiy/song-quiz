@@ -192,7 +192,7 @@ function nextRound() {
   $("guessControls").classList.remove("hidden");
   $("awardControls").classList.add("hidden");
   $("soloResult").classList.add("hidden");
-  $("soloBox").classList.toggle("hidden", !isSolo());
+  $("soloBox").classList.remove("hidden");
   $("attempts").innerHTML = "";
   $("guessInput").value = "";
   hideSuggestions();
@@ -233,20 +233,23 @@ async function hearMore() {
   await play();
 }
 
-function reveal() {
+// view: "award" (party, correct guess → pick the winner) or "result" (solo, or nobody got it)
+function reveal(view) {
   if (state.revealed) return;
   state.revealed = true;
   setStatus("");
+  hideSuggestions();
   const t = state.current;
-  $("songTitle").textContent = t.title;
+  $("songTitle").textContent = t.fullTitle || t.title;
   $("songArtist").textContent = t.artist;
   $("cover").src = t.cover;
   $("answer").classList.remove("hidden");
   $("mystery").classList.add("hidden");
   $("guessControls").classList.add("hidden");
-  if (isSolo()) {
-    $("soloBox").classList.add("hidden");
+  $("soloBox").classList.add("hidden");
+  if (view !== "award") {
     $("soloResult").classList.remove("hidden");
+    $("soloNextBtn").focus();
     playClip(0, 0).catch(() => {});
     return;
   }
@@ -427,13 +430,15 @@ function restore() {
 function applyModeUI() {
   const solo = isSolo();
   $("moreBtn").classList.toggle("hidden", solo);
-  $("revealBtn").textContent = solo ? "Give up" : "Reveal";
+  $("skipBtn").classList.toggle("hidden", !solo);
+  $("revealBtn").textContent = "Give up";
   $("scoresTitle").textContent = solo ? "Your score" : "Scores";
   $("scoreboard").classList.toggle("hidden", solo);
   $("soloStats").classList.toggle("hidden", !solo);
   $("keysHint").innerHTML = solo
     ? "Type to search · <b>↑ ↓</b> pick · <b>Enter</b> guess"
-    : "Keys: <b>Space</b> play / hear more · <b>R</b> reveal · <b>N</b> nobody / next";
+    : "Type what people shout · <b>Enter</b> check · outside the box: <b>Space</b> play / hear more";
+  $("guessInput").placeholder = solo ? "Type a song or artist…" : "Type a guess from the room…";
 }
 
 const norm = (str) =>
@@ -548,9 +553,11 @@ function submitGuess(track) {
     : [cur.title, cur.fullTitle].some((x) => norm(x) === norm(typed));
   hideSuggestions();
   $("guessInput").value = "";
-  if (correct) return finishSolo(true);
+  if (correct) return isSolo() ? finishSolo(true) : reveal("award");
   addAttempt(track ? `${track.fullTitle} — ${track.artist}` : typed, "wrong");
-  advanceOrLose();
+  // Solo: a wrong guess unlocks more of the song. Party: the host decides with "Hear more".
+  if (isSolo()) advanceOrLose();
+  else $("guessInput").focus();
 }
 
 function skip() {
@@ -576,9 +583,18 @@ function finishSolo(won) {
   msg.textContent = won ? `✓ Correct! +${pts} pts` : "✗ Not this time. It was:";
   msg.className = "solo-msg " + (won ? "win" : "lose");
   renderScores();
-  reveal();
-  $("songTitle").textContent = state.current.fullTitle;
-  $("soloNextBtn").focus();
+  reveal("result");
+}
+
+// Party: nobody got it (or the host gave up) → show the answer, no points.
+function giveUp() {
+  if (state.revealed) return;
+  if (isSolo()) return finishSolo(false);
+  state.history.push({ track: state.current, winner: null, pts: 0 });
+  const msg = $("soloMsg");
+  msg.textContent = "Nobody got it. It was:";
+  msg.className = "solo-msg lose";
+  reveal("result");
 }
 
 $("guessInput").addEventListener("input", updateSuggestions);
@@ -600,6 +616,37 @@ $("soloNextBtn").onclick = nextRound;
 $("soloReplayBtn").onclick = () => playClip(0, 0).catch(() => {});
 document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListener("change", () => { updateStartButton(); save(); }));
 
+// ---------------- Volume ----------------
+
+const VOL_KEY = "guess-the-song-volume";
+let lastVolume = 80;
+
+function setVolume(v, persist = true) {
+  v = Math.max(0, Math.min(100, Math.round(v)));
+  audio.volume = v / 100;
+  $("volume").value = v;
+  $("volIcon").textContent = v === 0 ? "🔇" : v < 40 ? "🔈" : v < 75 ? "🔉" : "🔊";
+  if (v > 0) lastVolume = v;
+  if (persist) try { localStorage.setItem(VOL_KEY, String(v)); } catch {}
+}
+
+(function initVolume() {
+  // iPhones and iPads ignore volume set from a web page; there the phone's buttons are the control.
+  const probe = new Audio();
+  probe.volume = 0.5;
+  if (probe.volume !== 0.5) {
+    $("volume").classList.add("hidden");
+    $("volIcon").classList.add("hidden");
+    $("volNote").classList.remove("hidden");
+    return;
+  }
+  let saved = 80;
+  try { const s = localStorage.getItem(VOL_KEY); if (s !== null) saved = Number(s); } catch {}
+  setVolume(saved, false);
+  $("volume").addEventListener("input", (e) => setVolume(Number(e.target.value)));
+  $("volIcon").onclick = () => setVolume(Number($("volume").value) === 0 ? lastVolume : 0);
+})();
+
 // ---------------- Wiring ----------------
 
 $("loadBtn").onclick = onLoad;
@@ -610,7 +657,7 @@ $("playerName").addEventListener("keydown", (e) => { if (e.key === "Enter") addP
 $("startBtn").onclick = startGame;
 $("playBtn").onclick = play;
 $("moreBtn").onclick = hearMore;
-$("revealBtn").onclick = () => (isSolo() ? finishSolo(false) : reveal());
+$("revealBtn").onclick = giveUp;
 $("nobodyBtn").onclick = () => award(null);
 $("replayFullBtn").onclick = () => playClip(0, 0).catch(() => {});
 $("endBtn").onclick = endGame;
@@ -626,10 +673,11 @@ document.addEventListener("keydown", (e) => {
     else if (state.step < state.steps.length - 1) hearMore();
     else play();
   } else if (e.key === "r" || e.key === "R") {
-    reveal();
+    giveUp();
   } else if (e.key === "n" || e.key === "N") {
-    if (state.revealed) isSolo() ? nextRound() : award(null);
-    else { state.history.push({ track: state.current, winner: null, pts: 0 }); nextRound(); }
+    if (!state.revealed) giveUp();
+    else if (!$("awardControls").classList.contains("hidden")) award(null);
+    else nextRound();
   }
 });
 

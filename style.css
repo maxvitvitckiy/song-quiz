@@ -168,3 +168,10 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
 .solo-stats div { background: #0f0f16; border: 1px solid var(--line); border-radius: 10px; padding: 10px 4px; }
 .solo-stats b { display: block; font-size: 1.4rem; color: var(--accent2); }
 .solo-stats small { color: var(--muted); }
+
+/* ---------- Volume ---------- */
+.round-info { gap: 12px; }
+.volume { display: flex; align-items: center; gap: 8px; margin-left: auto; font-weight: 400; }
+.volume input[type=range] { flex: none; width: 120px; padding: 0; border: 0; background: none; accent-color: var(--accent); }
+#volIcon { cursor: pointer; user-select: none; }
+@media (max-width: 520px) { .volume input[type=range] { width: 90px; } }

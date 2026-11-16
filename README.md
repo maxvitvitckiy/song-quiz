@@ -23,9 +23,15 @@ python3 -m http.server 8000
 3. Pick the difficulty, start position and number of rounds, then press **Start game**.
 4. Each round: **Play** a short clip. If nobody gets it, press **Hear more** for a longer clip.
    Fewer seconds heard means more points.
-5. Press **Reveal**, then tap whoever guessed right (or **Nobody**).
+5. Type what people shout into the guess box. Suggestions show the full title, artist and album cover.
+   - A wrong guess is listed and the round goes on.
+   - A correct guess reveals the song: tap whoever got it, or **Skip song** to give no points.
+   - **Give up** shows the answer with no points.
 
-Keyboard: `Space` play / hear more · `R` reveal · `N` nobody / skip.
+Keyboard (outside the guess box): `Space` play / hear more · `R` give up · `N` skip / next.
+
+Use the volume slider in the game header to set the level (remembered between games).
+On iPhone and iPad, browsers don't let web pages change volume, so use the phone's buttons there.
 
 ## Solo mode
 
