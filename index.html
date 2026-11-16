@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Guess the Song</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="wrap">
+    <header class="top">
+      <h1>🎵 Guess the Song</h1>
+      <p class="muted">30-second previews by Deezer</p>
+    </header>
+
+    <!-- SETUP -->
+    <section id="setup" class="card">
+      <h2>1. Playlist</h2>
+      <p class="muted small">Paste a Deezer playlist or album link (e.g. <code>https://www.deezer.com/playlist/1234567</code>) or just its number. The playlist must be public.</p>
+      <div class="row">
+        <input id="source" type="text" placeholder="https://www.deezer.com/playlist/…" autocomplete="off" />
+        <button id="loadBtn" class="btn">Load</button>
+      </div>
+      <p id="loadStatus" class="status"></p>
+
+      <h2>2. Players</h2>
+      <div class="row">
+        <input id="playerName" type="text" placeholder="Player or team name" autocomplete="off" />
+        <button id="addPlayerBtn" class="btn ghost">Add</button>
+      </div>
+      <ul id="playerList" class="chips"></ul>
+
+      <h2>3. Settings</h2>
+      <div class="settings">
+        <label>Clip steps
+          <select id="steps">
+            <option value="1,3,7,15">Hard: 1s → 3s → 7s → 15s</option>
+            <option value="2,5,10,20" selected>Normal: 2s → 5s → 10s → 20s</option>
+            <option value="5,10,20">Easy: 5s → 10s → 20s</option>
+          </select>
+        </label>
+        <label>Start position
+          <select id="startPos">
+            <option value="random" selected>Random point in the preview</option>
+            <option value="start">Beginning of the preview</option>
+          </select>
+        </label>
+        <label>Rounds
+          <select id="rounds">
+            <option value="10">10</option>
+            <option value="20" selected>20</option>
+            <option value="30">30</option>
+            <option value="0">Whole playlist</option>
+          </select>
+        </label>
+      </div>
+
+      <button id="startBtn" class="btn big" disabled>Start game</button>
+    </section>
+
+    <!-- GAME -->
+    <section id="game" class="hidden">
+      <div class="game-grid">
+        <div class="card stage">
+          <div class="round-info">
+            <span id="roundLabel">Round 1</span>
+            <span id="pointsLabel" class="pill">4 pts</span>
+          </div>
+
+          <div id="mystery" class="mystery">
+            <div class="disc" id="disc">?</div>
+            <div class="bars" id="bars"><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+
+          <div id="answer" class="answer hidden">
+            <img id="cover" alt="" />
+            <div>
+              <div id="songTitle" class="song-title"></div>
+              <div id="songArtist" class="song-artist"></div>
+            </div>
+          </div>
+
+          <div class="controls" id="guessControls">
+            <button id="playBtn" class="btn big">▶ Play 2s</button>
+            <button id="moreBtn" class="btn ghost" disabled>Hear more</button>
+            <button id="revealBtn" class="btn ghost">Reveal</button>
+          </div>
+
+          <div class="controls hidden" id="awardControls">
+            <p class="muted small">Who got it? <span id="awardPts"></span></p>
+            <div id="awardButtons" class="award"></div>
+            <div class="row center">
+              <button id="nobodyBtn" class="btn ghost">Nobody</button>
+              <button id="replayFullBtn" class="btn ghost">▶ Play preview</button>
+            </div>
+          </div>
+
+          <p id="gameStatus" class="status"></p>
+          <p class="muted small keys">Keys: <b>Space</b> play / hear more · <b>R</b> reveal · <b>N</b> nobody / next</p>
+        </div>
+
+        <aside class="card">
+          <h2>Scores</h2>
+          <ol id="scoreboard" class="scoreboard"></ol>
+          <button id="endBtn" class="btn ghost small-btn">End game</button>
+        </aside>
+      </div>
+    </section>
+
+    <!-- END -->
+    <section id="end" class="card hidden">
+      <h2>🏆 Final scores</h2>
+      <ol id="finalBoard" class="scoreboard big-board"></ol>
+      <h3>Songs played</h3>
+      <ol id="history" class="history"></ol>
+      <button id="againBtn" class="btn big">Play again</button>
+    </section>
+
+    <audio id="audio" preload="auto"></audio>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
