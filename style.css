@@ -110,7 +110,7 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
 .song-artist { font-size: 1.1rem; color: var(--muted); margin-top: 4px; }
 
 .controls { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
-#awardControls { flex-direction: column; align-items: center; }
+#awardControls, #soloResult { flex-direction: column; align-items: center; }
 .award { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 .award .btn { min-width: 110px; }
 .keys { margin-top: 18px; }
@@ -122,3 +122,49 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
 .history { color: var(--muted); padding-left: 22px; }
 .history li { margin: 4px 0; }
 #againBtn { margin-top: 18px; width: 100%; }
+
+/* ---------- Mode picker ---------- */
+.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mode { cursor: pointer; }
+.mode input { position: absolute; opacity: 0; pointer-events: none; }
+.mode span {
+  display: flex; flex-direction: column; gap: 3px; height: 100%;
+  background: #0f0f16; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
+}
+.mode small { color: var(--muted); font-size: .85rem; }
+.mode input:checked + span { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.mode input:focus-visible + span { outline: 2px solid var(--accent); }
+
+/* ---------- Solo guessing ---------- */
+.solo { max-width: 520px; margin: 18px auto 0; }
+.guess-wrap { position: relative; display: flex; }
+.suggestions {
+  position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 10;
+  list-style: none; margin: 0; padding: 6px; text-align: left;
+  background: #14141d; border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 14px 40px #000a; max-height: 340px; overflow-y: auto;
+}
+.suggestions li {
+  display: flex; align-items: center; gap: 12px; padding: 7px 8px; border-radius: 8px; cursor: pointer;
+}
+.suggestions li.active, .suggestions li:hover { background: #2a2140; }
+.suggestions img { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; flex: none; background: #222; }
+.suggestions .s-title { font-weight: 600; line-height: 1.25; }
+.suggestions .s-artist { color: var(--muted); font-size: .88rem; }
+.suggestions mark { background: none; color: var(--accent2); }
+.suggestions .empty { color: var(--muted); cursor: default; }
+.suggestions .empty:hover { background: none; }
+.attempts { list-style: none; padding: 0; margin: 14px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.attempts li {
+  background: #0f0f16; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px;
+  text-align: left; color: var(--muted);
+}
+.attempts li.wrong::before { content: "✗ "; color: #ff6b6b; font-weight: 700; }
+.attempts li.skip::before { content: "⏭ "; }
+.solo-msg { font-size: 1.2rem; font-weight: 700; margin: 0 0 4px; }
+.solo-msg.win { color: var(--ok); }
+.solo-msg.lose { color: #ff6b6b; }
+.solo-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 4px; text-align: center; }
+.solo-stats div { background: #0f0f16; border: 1px solid var(--line); border-radius: 10px; padding: 10px 4px; }
+.solo-stats b { display: block; font-size: 1.4rem; color: var(--accent2); }
+.solo-stats small { color: var(--muted); }

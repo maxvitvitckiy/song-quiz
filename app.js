@@ -17,7 +17,12 @@ const state = {
   offset: 0,       // where in the 30s preview the clip starts
   revealed: false,
   history: [],     // [{ track, winner }]
+  mode: "party",   // "party" | "solo"
+  played: false,
+  solo: { correct: 0, streak: 0, best: 0 },
 };
+
+const isSolo = () => state.mode === "solo";
 
 // ---------------- Deezer (JSONP) ----------------
 
@@ -61,8 +66,10 @@ async function loadSource(src) {
       tracks.push({
         id: t.id,
         title: t.title_short || t.title,
+        fullTitle: t.title || t.title_short,
         artist: t.artist ? t.artist.name : "",
         cover: (t.album && (t.album.cover_big || t.album.cover_medium)) || info.cover_big || info.cover_medium || "",
+        coverSmall: (t.album && (t.album.cover_small || t.album.cover_medium)) || info.cover_small || info.cover_medium || "",
         preview: t.preview,
       });
     }
@@ -121,7 +128,7 @@ async function playClip(from, seconds) {
   try {
     await loadAudio(track.preview);
   } catch {
-    if (retried) throw new Error("This song's preview won't play. Press N to skip it.");
+    if (retried) throw new Error("This song's preview won't play. Skip it to move on.");
     retried = true;
     // Preview links expire after a while; ask Deezer for a fresh one.
     await refreshPreview(track);
@@ -153,7 +160,11 @@ function startGame() {
   const rounds = Number($("rounds").value);
   state.queue = shuffle(state.tracks);
   if (rounds > 0) state.queue = state.queue.slice(0, rounds);
+  state.mode = document.querySelector('input[name="mode"]:checked').value;
+  if (isSolo()) state.solo = { correct: 0, streak: 0, best: 0 };
   state.players.forEach((p) => (p.score = 0));
+  state.soloPlayer = { name: "You", score: 0 };
+  applyModeUI();
   state.round = 0;
   state.history = [];
   save();
@@ -180,6 +191,11 @@ function nextRound() {
   $("mystery").classList.remove("hidden");
   $("guessControls").classList.remove("hidden");
   $("awardControls").classList.add("hidden");
+  $("soloResult").classList.add("hidden");
+  $("soloBox").classList.toggle("hidden", !isSolo());
+  $("attempts").innerHTML = "";
+  $("guessInput").value = "";
+  hideSuggestions();
   $("moreBtn").disabled = true;
   $("playBtn").disabled = false;
   setStatus("");
@@ -196,6 +212,7 @@ function updateStepUI(played) {
   const next = state.steps[state.step + 1];
   $("moreBtn").textContent = next ? `Hear more (${next}s)` : "Hear more";
   $("moreBtn").disabled = !played || !next;
+  $("skipBtn").textContent = next ? `Skip (+${next - s}s)` : "Give up";
 }
 
 async function play() {
@@ -219,6 +236,7 @@ async function hearMore() {
 function reveal() {
   if (state.revealed) return;
   state.revealed = true;
+  setStatus("");
   const t = state.current;
   $("songTitle").textContent = t.title;
   $("songArtist").textContent = t.artist;
@@ -226,6 +244,12 @@ function reveal() {
   $("answer").classList.remove("hidden");
   $("mystery").classList.add("hidden");
   $("guessControls").classList.add("hidden");
+  if (isSolo()) {
+    $("soloBox").classList.add("hidden");
+    $("soloResult").classList.remove("hidden");
+    playClip(0, 0).catch(() => {});
+    return;
+  }
   $("awardControls").classList.remove("hidden");
   const pts = pointsForStep(state.step);
   $("awardPts").textContent = `(+${pts} pts)`;
@@ -260,12 +284,19 @@ function endGame() {
   show("end");
   const board = $("finalBoard");
   board.innerHTML = "";
-  sortedPlayers().forEach((p) => board.appendChild(scoreItem(p)));
+  if (isSolo()) {
+    const played = state.history.length;
+    [["Score", state.soloPlayer.score], ["Correct", `${state.solo.correct} / ${played}`], ["Best streak", state.solo.best]]
+      .forEach(([k, v]) => board.appendChild(scoreItem({ name: k, score: v })));
+  } else {
+    sortedPlayers().forEach((p) => board.appendChild(scoreItem(p)));
+  }
   const hist = $("history");
   hist.innerHTML = "";
   state.history.forEach((h) => {
     const li = document.createElement("li");
-    li.textContent = `${h.track.title} — ${h.track.artist}` + (h.winner ? `  (${h.winner} +${h.pts})` : "  (nobody)");
+    const result = isSolo() ? (h.winner ? `  ✓ +${h.pts}` : "  ✗") : (h.winner ? `  (${h.winner} +${h.pts})` : "  (nobody)");
+    li.textContent = `${h.track.fullTitle || h.track.title} — ${h.track.artist}` + result;
     hist.appendChild(li);
   });
 }
@@ -296,6 +327,13 @@ function scoreItem(p) {
 function renderScores() {
   const board = $("scoreboard");
   board.innerHTML = "";
+  if (isSolo()) {
+    $("soloStats").innerHTML =
+      `<div><b>${state.soloPlayer.score}</b><small>points</small></div>` +
+      `<div><b>${state.solo.correct}/${state.history.length}</b><small>correct</small></div>` +
+      `<div><b>${state.solo.streak}</b><small>streak</small></div>`;
+    return;
+  }
   sortedPlayers().forEach((p) => board.appendChild(scoreItem(p)));
 }
 
@@ -316,7 +354,9 @@ function renderPlayers() {
 }
 
 function updateStartButton() {
-  $("startBtn").disabled = !(state.tracks.length && state.players.length);
+  const solo = document.querySelector('input[name="mode"]:checked').value === "solo";
+  $("startBtn").disabled = !(state.tracks.length && (solo || state.players.length));
+  $("playersSection").classList.toggle("hidden", solo);
 }
 
 function addPlayer() {
@@ -362,6 +402,7 @@ function save() {
       steps: $("steps").value,
       startPos: $("startPos").value,
       rounds: $("rounds").value,
+      mode: document.querySelector('input[name="mode"]:checked').value,
     }));
   } catch {}
 }
@@ -375,10 +416,189 @@ function restore() {
     if (s.steps) $("steps").value = s.steps;
     if (s.startPos) $("startPos").value = s.startPos;
     if (s.rounds) $("rounds").value = s.rounds;
+    if (s.mode) document.querySelector(`input[name="mode"][value="${s.mode}"]`).checked = true;
     renderPlayers();
     if (s.source) onLoad();
   } catch {}
 }
+
+// ---------------- Solo mode ----------------
+
+function applyModeUI() {
+  const solo = isSolo();
+  $("moreBtn").classList.toggle("hidden", solo);
+  $("revealBtn").textContent = solo ? "Give up" : "Reveal";
+  $("scoresTitle").textContent = solo ? "Your score" : "Scores";
+  $("scoreboard").classList.toggle("hidden", solo);
+  $("soloStats").classList.toggle("hidden", !solo);
+  $("keysHint").innerHTML = solo
+    ? "Type to search · <b>↑ ↓</b> pick · <b>Enter</b> guess"
+    : "Keys: <b>Space</b> play / hear more · <b>R</b> reveal · <b>N</b> nobody / next";
+}
+
+const norm = (str) =>
+  (str || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
+const escapeHtml = (str) => str.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function highlight(text, words) {
+  // Highlight typed words inside a suggestion, ignoring case and accents.
+  let html = "";
+  const n = norm(text);
+  if (n.length !== text.length || !words.length) return escapeHtml(text);
+  const marks = new Array(text.length).fill(false);
+  for (const w of words) {
+    let i = n.indexOf(w);
+    while (i !== -1) { for (let k = i; k < i + w.length; k++) marks[k] = true; i = n.indexOf(w, i + 1); }
+  }
+  let open = false;
+  for (let i = 0; i < text.length; i++) {
+    if (marks[i] && !open) { html += "<mark>"; open = true; }
+    if (!marks[i] && open) { html += "</mark>"; open = false; }
+    html += escapeHtml(text[i]);
+  }
+  return html + (open ? "</mark>" : "");
+}
+
+let suggestionItems = [];
+let activeSuggestion = -1;
+
+function uniqueSongs() {
+  const seen = new Set();
+  return state.tracks.filter((t) => {
+    const key = norm(t.fullTitle) + "|" + norm(t.artist);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function updateSuggestions() {
+  const q = norm($("guessInput").value);
+  const box = $("suggestions");
+  if (!q) return hideSuggestions();
+  const words = q.split(" ");
+  suggestionItems = uniqueSongs()
+    .map((t) => {
+      const title = norm(t.fullTitle), hay = title + " " + norm(t.artist);
+      if (!words.every((w) => hay.includes(w))) return null;
+      const rank = title.startsWith(q) ? 0 : title.includes(q) ? 1 : 2;
+      return { t, rank };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.rank - b.rank || a.t.fullTitle.localeCompare(b.t.fullTitle))
+    .slice(0, 8)
+    .map((x) => x.t);
+
+  activeSuggestion = suggestionItems.length ? 0 : -1;
+  box.innerHTML = "";
+  if (!suggestionItems.length) {
+    box.innerHTML = '<li class="empty">No songs in this playlist match</li>';
+  }
+  suggestionItems.forEach((t, i) => {
+    const li = document.createElement("li");
+    li.setAttribute("role", "option");
+    li.innerHTML =
+      `<img src="${escapeHtml(t.coverSmall || t.cover)}" alt="" loading="lazy" />` +
+      `<div><div class="s-title">${highlight(t.fullTitle, words)}</div>` +
+      `<div class="s-artist">${highlight(t.artist, words)}</div></div>`;
+    li.onmousedown = (e) => { e.preventDefault(); submitGuess(t); };
+    box.appendChild(li);
+  });
+  paintActive();
+  box.classList.remove("hidden");
+}
+
+function paintActive() {
+  [...$("suggestions").children].forEach((li, i) => li.classList.toggle("active", i === activeSuggestion));
+  const el = $("suggestions").children[activeSuggestion];
+  if (el) el.scrollIntoView({ block: "nearest" });
+}
+
+function hideSuggestions() {
+  $("suggestions").classList.add("hidden");
+  suggestionItems = [];
+  activeSuggestion = -1;
+}
+
+function addAttempt(text, cls) {
+  const li = document.createElement("li");
+  li.className = cls;
+  li.textContent = text;
+  $("attempts").appendChild(li);
+}
+
+async function advanceOrLose() {
+  if (state.step < state.steps.length - 1) {
+    state.step++;
+    await play();
+  } else {
+    finishSolo(false);
+  }
+}
+
+function submitGuess(track) {
+  if (state.revealed) return;
+  const typed = $("guessInput").value.trim();
+  if (!track && !typed) return;
+  const cur = state.current;
+  const correct = track
+    ? track.id === cur.id || (norm(track.fullTitle) === norm(cur.fullTitle) && norm(track.artist) === norm(cur.artist))
+    : [cur.title, cur.fullTitle].some((x) => norm(x) === norm(typed));
+  hideSuggestions();
+  $("guessInput").value = "";
+  if (correct) return finishSolo(true);
+  addAttempt(track ? `${track.fullTitle} — ${track.artist}` : typed, "wrong");
+  advanceOrLose();
+}
+
+function skip() {
+  if (state.revealed) return;
+  if (state.step >= state.steps.length - 1) return finishSolo(false);
+  addAttempt(`Skipped`, "skip");
+  advanceOrLose();
+}
+
+function finishSolo(won) {
+  if (state.revealed) return;
+  const pts = pointsForStep(state.step);
+  if (won) {
+    state.soloPlayer.score += pts;
+    state.solo.correct++;
+    state.solo.streak++;
+    state.solo.best = Math.max(state.solo.best, state.solo.streak);
+  } else {
+    state.solo.streak = 0;
+  }
+  state.history.push({ track: state.current, winner: won ? "You" : null, pts: won ? pts : 0 });
+  const msg = $("soloMsg");
+  msg.textContent = won ? `✓ Correct! +${pts} pts` : "✗ Not this time. It was:";
+  msg.className = "solo-msg " + (won ? "win" : "lose");
+  renderScores();
+  reveal();
+  $("songTitle").textContent = state.current.fullTitle;
+  $("soloNextBtn").focus();
+}
+
+$("guessInput").addEventListener("input", updateSuggestions);
+$("guessInput").addEventListener("focus", updateSuggestions);
+$("guessInput").addEventListener("blur", () => setTimeout(hideSuggestions, 120));
+$("guessInput").addEventListener("keydown", (e) => {
+  const n = suggestionItems.length;
+  if (e.key === "ArrowDown" && n) { e.preventDefault(); activeSuggestion = (activeSuggestion + 1) % n; paintActive(); }
+  else if (e.key === "ArrowUp" && n) { e.preventDefault(); activeSuggestion = (activeSuggestion - 1 + n) % n; paintActive(); }
+  else if (e.key === "Enter") {
+    e.preventDefault();
+    if (activeSuggestion >= 0 && n) submitGuess(suggestionItems[activeSuggestion]);
+    else submitGuess(null);
+  } else if (e.key === "Escape") hideSuggestions();
+});
+$("guessBtn").onclick = () => submitGuess(activeSuggestion >= 0 ? suggestionItems[activeSuggestion] : null);
+$("skipBtn").onclick = skip;
+$("soloNextBtn").onclick = nextRound;
+$("soloReplayBtn").onclick = () => playClip(0, 0).catch(() => {});
+document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListener("change", () => { updateStartButton(); save(); }));
 
 // ---------------- Wiring ----------------
 
@@ -390,7 +610,7 @@ $("playerName").addEventListener("keydown", (e) => { if (e.key === "Enter") addP
 $("startBtn").onclick = startGame;
 $("playBtn").onclick = play;
 $("moreBtn").onclick = hearMore;
-$("revealBtn").onclick = reveal;
+$("revealBtn").onclick = () => (isSolo() ? finishSolo(false) : reveal());
 $("nobodyBtn").onclick = () => award(null);
 $("replayFullBtn").onclick = () => playClip(0, 0).catch(() => {});
 $("endBtn").onclick = endGame;
@@ -408,7 +628,7 @@ document.addEventListener("keydown", (e) => {
   } else if (e.key === "r" || e.key === "R") {
     reveal();
   } else if (e.key === "n" || e.key === "N") {
-    if (state.revealed) award(null);
+    if (state.revealed) isSolo() ? nextRound() : award(null);
     else { state.history.push({ track: state.current, winner: null, pts: 0 }); nextRound(); }
   }
 });

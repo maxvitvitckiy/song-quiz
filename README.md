@@ -27,6 +27,17 @@ python3 -m http.server 8000
 
 Keyboard: `Space` play / hear more · `R` reveal · `N` nobody / skip.
 
+## Solo mode
+
+Pick **Solo** in setup (no players needed). Each round:
+
+1. **Play** the clip, then start typing a song or artist name.
+2. Suggestions from the playlist appear with the full title, artist and album cover.
+   Use the arrow keys and Enter, or tap one.
+3. A wrong guess or **Skip** unlocks a longer clip. Run out of clips (or **Give up**) and the answer is revealed.
+
+You score more points the fewer seconds you needed, and the sidebar tracks points, correct answers and your streak.
+
 ## Notes
 
 - No account or login needed. Only public data and 30-second previews are used.

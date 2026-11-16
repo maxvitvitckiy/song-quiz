@@ -23,12 +23,20 @@
       </div>
       <p id="loadStatus" class="status"></p>
 
-      <h2>2. Players</h2>
+      <h2>2. Mode</h2>
+      <div class="modes">
+        <label class="mode"><input type="radio" name="mode" value="party" checked /><span><b>Party</b><small>Play out loud, the host awards points</small></span></label>
+        <label class="mode"><input type="radio" name="mode" value="solo" /><span><b>Solo</b><small>Type your guess, with suggestions</small></span></label>
+      </div>
+
+      <div id="playersSection">
+      <h2>Players</h2>
       <div class="row">
         <input id="playerName" type="text" placeholder="Player or team name" autocomplete="off" />
         <button id="addPlayerBtn" class="btn ghost">Add</button>
       </div>
       <ul id="playerList" class="chips"></ul>
+      </div>
 
       <h2>3. Settings</h2>
       <div class="settings">
@@ -86,6 +94,26 @@
             <button id="revealBtn" class="btn ghost">Reveal</button>
           </div>
 
+          <div id="soloBox" class="solo hidden">
+            <div class="guess-wrap">
+              <input id="guessInput" type="text" placeholder="Type a song or artist…" autocomplete="off" spellcheck="false" />
+              <ul id="suggestions" class="suggestions hidden" role="listbox"></ul>
+            </div>
+            <div class="row center">
+              <button id="guessBtn" class="btn">Guess</button>
+              <button id="skipBtn" class="btn ghost">Skip</button>
+            </div>
+            <ul id="attempts" class="attempts"></ul>
+          </div>
+
+          <div class="controls hidden" id="soloResult">
+            <p id="soloMsg" class="solo-msg"></p>
+            <div class="row center">
+              <button id="soloNextBtn" class="btn">Next song →</button>
+              <button id="soloReplayBtn" class="btn ghost">▶ Play preview</button>
+            </div>
+          </div>
+
           <div class="controls hidden" id="awardControls">
             <p class="muted small">Who got it? <span id="awardPts"></span></p>
             <div id="awardButtons" class="award"></div>
@@ -96,12 +124,13 @@
           </div>
 
           <p id="gameStatus" class="status"></p>
-          <p class="muted small keys">Keys: <b>Space</b> play / hear more · <b>R</b> reveal · <b>N</b> nobody / next</p>
+          <p class="muted small keys" id="keysHint">Keys: <b>Space</b> play / hear more · <b>R</b> reveal · <b>N</b> nobody / next</p>
         </div>
 
         <aside class="card">
-          <h2>Scores</h2>
+          <h2 id="scoresTitle">Scores</h2>
           <ol id="scoreboard" class="scoreboard"></ol>
+          <div id="soloStats" class="solo-stats hidden"></div>
           <button id="endBtn" class="btn ghost small-btn">End game</button>
         </aside>
       </div>
