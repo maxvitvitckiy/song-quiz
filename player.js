@@ -202,6 +202,8 @@ function render() {
   if (ans) {
     $("pTitle").textContent = ans.title;
     $("pArtist").textContent = ans.artist;
+    $("pFrom").textContent = ans.from ? "From: " + ans.from : "";
+    $("pFrom").classList.toggle("hidden", !ans.from);
     $("pCover").src = ans.cover || "";
     $("pCover").classList.toggle("hidden", !ans.cover);
   }

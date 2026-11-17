@@ -6,8 +6,8 @@ const $ = (id) => document.getElementById(id);
 const STORE_KEY = "guess-the-song-v1";
 
 const state = {
-  sourceTitle: "",
-  tracks: [],      // all playable tracks from the playlist
+  sources: [],     // [{ key, input, title, tracks }] one per added playlist or album
+  tracks: [],      // all playable tracks from every source, merged by id (track.playlists = source titles)
   queue: [],       // shuffled tracks for this game
   players: [],     // players in the current game: party roster or online room
   partyPlayers: [], // [{ name, score }] typed in on the setup screen (party mode)
@@ -157,11 +157,33 @@ function shuffle(arr) {
 
 function pointsForStep(step) { return state.steps.length - step; }
 
+// Each round: pick a random playlist that still has unplayed songs, then a random song from it.
+// So a 20-song playlist comes up as often as a 500-song one. A song in two playlists plays once.
+function buildQueue(rounds) {
+  const byId = new Map(state.tracks.map((t) => [t.id, t]));
+  const pools = state.sources.map((s) => shuffle(s.tracks.map((t) => t.id)));
+  const used = new Set(), queue = [];
+  const limit = rounds > 0 ? rounds : state.tracks.length;
+  while (queue.length < limit) {
+    pools.forEach((p) => { while (p.length && used.has(p[p.length - 1])) p.pop(); });
+    const live = pools.filter((p) => p.length);
+    if (!live.length) break;
+    const id = live[Math.floor(Math.random() * live.length)].pop();
+    used.add(id);
+    queue.push(byId.get(id));
+  }
+  return queue;
+}
+
+// "From: Party hits · 2000s" when more than one playlist is in the game.
+function playlistLabel(track) {
+  return state.sources.length > 1 && track.playlists && track.playlists.length ? track.playlists.join(" · ") : "";
+}
+
 function startGame() {
   state.steps = $("steps").value.split(",").map(Number);
   const rounds = Number($("rounds").value);
-  state.queue = shuffle(state.tracks);
-  if (rounds > 0) state.queue = state.queue.slice(0, rounds);
+  state.queue = buildQueue(rounds);
   state.mode = document.querySelector('input[name="mode"]:checked').value;
   state.players = isOnline() ? net.players : state.partyPlayers;
   if (isSolo()) state.solo = { title: 0, artist: 0, streak: 0, best: 0 };
@@ -403,6 +425,9 @@ function finishRound() {
 
   $("songTitle").textContent = t.fullTitle || t.title;
   $("songArtist").textContent = t.artist;
+  const from = playlistLabel(t);
+  $("songFrom").textContent = from ? "From: " + from : "";
+  $("songFrom").classList.toggle("hidden", !from);
   $("cover").src = t.cover;
   $("answer").classList.remove("hidden");
   $("mystery").classList.add("hidden");
@@ -444,7 +469,8 @@ function endGame() {
       if (!r) return `${LABEL[f].toLowerCase()} ✗`;
       return isSolo() ? `${LABEL[f].toLowerCase()} +${r.pts}` : `${LABEL[f].toLowerCase()}: ${r.by} +${r.pts}`;
     };
-    li.textContent = `${h.track.fullTitle || h.track.title} — ${h.track.artist}  (${part("title")}, ${part("artist")})`;
+    const from = playlistLabel(h.track);
+    li.textContent = `${h.track.fullTitle || h.track.title} — ${h.track.artist}${from ? `  [${from}]` : ""}  (${part("title")}, ${part("artist")})`;
     hist.appendChild(li);
   });
 }
@@ -536,27 +562,82 @@ function addPlayer() {
   save();
 }
 
-async function onLoad() {
+// Add one playlist or album. Returns true if it was added.
+async function addSource(input, quiet) {
   const status = $("loadStatus");
   let src;
-  try { src = parseSource($("source").value); }
-  catch (e) { return setStatus(e.message, "error", status); }
+  try { src = parseSource(input); }
+  catch (e) { setStatus(e.message, "error", status); return false; }
+  const key = `${src.type}:${src.id}`;
+  if (state.sources.some((s) => s.key === key)) {
+    setStatus("That playlist is already added.", "error", status);
+    return false;
+  }
   $("loadBtn").disabled = true;
   setStatus("Loading songs from Deezer…", "", status);
   try {
     const res = await loadSource(src);
-    state.tracks = res.tracks;
-    state.sourceTitle = res.title;
-    if (!res.tracks.length) setStatus(`"${res.title}" has no songs with previews.`, "error", status);
-    else setStatus(`Loaded "${res.title}": ${res.tracks.length} songs ready.`, "ok", status);
-    save();
+    if (!res.tracks.length) { setStatus(`"${res.title}" has no songs with previews.`, "error", status); return false; }
+    if (state.sources.some((s) => s.key === key)) return false; // added twice while loading
+    state.sources.push({ key, input: input.trim(), title: res.title || `Deezer ${src.type} ${src.id}`, tracks: res.tracks });
+    mergeTracks();
+    if (!quiet) setStatus(`Added "${res.title}" (${res.tracks.length} songs).`, "ok", status);
+    return true;
   } catch (e) {
-    state.tracks = [];
     setStatus(e.message + " Make sure the playlist is public.", "error", status);
+    return false;
   } finally {
     $("loadBtn").disabled = false;
+    renderSources();
     updateStartButton();
   }
+}
+
+async function onLoad() {
+  const input = $("source").value;
+  if (!input.trim()) return;
+  if (await addSource(input)) { $("source").value = ""; save(); }
+}
+
+function removeSource(i) {
+  state.sources.splice(i, 1);
+  mergeTracks();
+  renderSources();
+  setStatus("", "", $("loadStatus"));
+  updateStartButton();
+  save();
+}
+
+// One entry per song; a song that's in several playlists remembers all their names.
+function mergeTracks() {
+  const byId = new Map();
+  for (const s of state.sources) {
+    for (const t of s.tracks) {
+      const m = byId.get(t.id);
+      if (m) { if (!m.playlists.includes(s.title)) m.playlists.push(s.title); }
+      else byId.set(t.id, { ...t, playlists: [s.title] });
+    }
+  }
+  state.tracks = [...byId.values()];
+}
+
+function renderSources() {
+  const list = $("sourceList");
+  list.innerHTML = "";
+  state.sources.forEach((s, i) => {
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    name.textContent = s.title;
+    const n = document.createElement("small");
+    n.textContent = `${s.tracks.length} songs`;
+    const x = document.createElement("button");
+    x.textContent = "×";
+    x.title = `Remove ${s.title}`;
+    x.onclick = () => removeSource(i);
+    li.append(name, n, x);
+    list.appendChild(li);
+  });
+  if (state.sources.length > 1) setStatus(`${state.tracks.length} songs from ${state.sources.length} playlists.`, "ok", $("loadStatus"));
 }
 
 // ---------------- Persistence ----------------
@@ -564,7 +645,7 @@ async function onLoad() {
 function save() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      source: $("source").value,
+      sources: state.sources.map((s) => s.input),
       players: state.partyPlayers.map((p) => p.name),
       steps: $("steps").value,
       startPos: $("startPos").value,
@@ -578,14 +659,14 @@ function restore() {
   try {
     const s = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
     if (!s) return;
-    $("source").value = s.source || "";
     state.partyPlayers = (s.players || []).map((name) => ({ name, score: 0 }));
     if (s.steps) $("steps").value = s.steps;
     if (s.startPos) $("startPos").value = s.startPos;
     if (s.rounds) $("rounds").value = s.rounds;
     if (s.mode) document.querySelector(`input[name="mode"][value="${s.mode}"]`).checked = true;
     renderPlayers();
-    if (s.source) onLoad();
+    const inputs = s.sources || (s.source ? [s.source] : []);   // older saves had one "source"
+    (async () => { for (const input of inputs) await addSource(input, true); })();
   } catch {}
 }
 

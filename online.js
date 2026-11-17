@@ -308,7 +308,7 @@ function stateMessage() {
     solved,
     last: net.last,
     players: net.players.map((p) => ({ name: p.name, score: p.score, online: p.online })),
-    answer: (net.phase === "reveal" || net.phase === "end") && t ? { title: t.fullTitle || t.title, artist: t.artist, cover: t.cover } : null,
+    answer: (net.phase === "reveal" || net.phase === "end") && t ? { title: t.fullTitle || t.title, artist: t.artist, cover: t.cover, from: playlistLabel(t) } : null,
   };
 }
 
