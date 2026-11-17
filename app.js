@@ -16,10 +16,10 @@ const state = {
   steps: [2, 5, 10, 20],
   offset: 0,       // where in the 30s preview the clip starts
   revealed: false,
-  history: [],     // [{ track, winner }]
+  history: [],     // [{ track, title: {by, pts}|null, artist: {by, pts}|null }]
   mode: "party",   // "party" | "solo"
   played: false,
-  solo: { correct: 0, streak: 0, best: 0 },
+  solo: { title: 0, artist: 0, streak: 0, best: 0 },
 };
 
 const isSolo = () => state.mode === "solo";
@@ -68,6 +68,7 @@ async function loadSource(src) {
         title: t.title_short || t.title,
         fullTitle: t.title || t.title_short,
         artist: t.artist ? t.artist.name : "",
+        artistPic: t.artist ? t.artist.picture_small || t.artist.picture_medium || "" : "",
         cover: (t.album && (t.album.cover_big || t.album.cover_medium)) || info.cover_big || info.cover_medium || "",
         coverSmall: (t.album && (t.album.cover_small || t.album.cover_medium)) || info.cover_small || info.cover_medium || "",
         preview: t.preview,
@@ -161,7 +162,7 @@ function startGame() {
   state.queue = shuffle(state.tracks);
   if (rounds > 0) state.queue = state.queue.slice(0, rounds);
   state.mode = document.querySelector('input[name="mode"]:checked').value;
-  if (isSolo()) state.solo = { correct: 0, streak: 0, best: 0 };
+  if (isSolo()) state.solo = { title: 0, artist: 0, streak: 0, best: 0 };
   state.players.forEach((p) => (p.score = 0));
   state.soloPlayer = { name: "You", score: 0 };
   applyModeUI();
@@ -173,6 +174,56 @@ function startGame() {
   nextRound();
 }
 
+// ---------------- Answer matching ----------------
+
+const norm = (str) =>
+  (str || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+    .replace(/&/g, " and ").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
+// "Song (feat. X) [Remix] - Radio Edit" → "Song"
+const baseTitle = (t) => (t || "").replace(/\s*[\(\[][^\)\]]*[\)\]]/g, "").replace(/\s+-\s+.*$/, "").trim();
+
+const FEAT_RE = /[\(\[]\s*(?:feat\.?|ft\.?|featuring|with)\s+([^\)\]]+)[\)\]]/i;
+const splitNames = (s) => (s || "").split(/\s*(?:,|&|\band\b|\bx\b|\+|\/)\s*/i).map((x) => x.trim()).filter(Boolean);
+
+// Every artist name that counts for a track: main artist (whole and split), featured artists
+// from the title, and contributors fetched from Deezer at the start of the round.
+function artistNames(track) {
+  const names = new Set();
+  const add = (n) => { const k = norm(n); if (k) names.add(k); };
+  add(track.artist);
+  splitNames(track.artist).forEach(add);
+  const f = (track.fullTitle || "").match(FEAT_RE);
+  if (f) splitNames(f[1]).forEach(add);
+  (track.contributors || []).forEach(add);
+  return names;
+}
+
+function titleMatches(guess, track) {
+  const g = norm(guess), gb = norm(baseTitle(guess));
+  return [track.title, track.fullTitle].some((t) => norm(t) === g || norm(baseTitle(t)) === gb) && gb !== "";
+}
+
+function artistMatches(guess, track) {
+  const names = artistNames(track);
+  const g = norm(guess);
+  return names.has(g) || splitNames(guess).some((p) => names.has(norm(p)));
+}
+
+async function loadContributors(track) {
+  if (track.contributors) return;
+  try {
+    const t = await deezer(`/track/${track.id}`);
+    track.contributors = (t.contributors || []).map((c) => c.name);
+    if (t.preview) track.preview = t.preview;
+  } catch { track.contributors = []; }
+}
+
+// ---------------- Rounds ----------------
+
+const FIELDS = ["title", "artist"];
+const LABEL = { title: "Title", artist: "Artist" };
+
 function nextRound() {
   stopAudio();
   if (state.round >= state.queue.length) return endGame();
@@ -181,6 +232,9 @@ function nextRound() {
   state.step = 0;
   state.revealed = false;
   state.played = false;
+  state.solved = { title: null, artist: null }; // { by: name|null, pts }
+  state.pending = null;                          // field waiting for "who got it?"
+  state.queuedAward = null;                      // second box guessed right at the same time
   retried = false;
   const maxClip = state.steps[state.steps.length - 1];
   const room = Math.max(0, 29 - maxClip);
@@ -194,20 +248,27 @@ function nextRound() {
   $("soloResult").classList.add("hidden");
   $("soloBox").classList.remove("hidden");
   $("attempts").innerHTML = "";
-  $("guessInput").value = "";
+  $("guessBtn").parentElement.classList.remove("hidden");
+  FIELDS.forEach((f) => {
+    $(`input-${f}`).value = "";
+    $(`input-${f}`).parentElement.classList.remove("hidden");
+    $(`solved-${f}`).classList.add("hidden");
+  });
   hideSuggestions();
   $("moreBtn").disabled = true;
   $("playBtn").disabled = false;
   setStatus("");
   updateStepUI(false);
 
-  // Warm up the audio so the first clip starts instantly.
   loadAudio(state.current.preview).catch(() => {});
+  loadContributors(state.current);
 }
 
 function updateStepUI(played) {
   const s = state.steps[state.step];
-  $("pointsLabel").textContent = `${pointsForStep(state.step)} pts`;
+  const p = pointsForStep(state.step);
+  $("pointsLabel").textContent = `${p} pts each`;
+  FIELDS.forEach((f) => ($(`pts-${f}`).textContent = state.solved && state.solved[f] ? "" : `+${p}`));
   $("playBtn").textContent = played ? `↺ Replay ${s}s` : `▶ Play ${s}s`;
   const next = state.steps[state.step + 1];
   $("moreBtn").textContent = next ? `Hear more (${next}s)` : "Hear more";
@@ -233,28 +294,41 @@ async function hearMore() {
   await play();
 }
 
-// view: "award" (party, correct guess → pick the winner) or "result" (solo, or nobody got it)
-function reveal(view) {
-  if (state.revealed) return;
-  state.revealed = true;
-  setStatus("");
-  hideSuggestions();
-  const t = state.current;
-  $("songTitle").textContent = t.fullTitle || t.title;
-  $("songArtist").textContent = t.artist;
-  $("cover").src = t.cover;
-  $("answer").classList.remove("hidden");
-  $("mystery").classList.add("hidden");
-  $("guessControls").classList.add("hidden");
-  $("soloBox").classList.add("hidden");
-  if (view !== "award") {
-    $("soloResult").classList.remove("hidden");
-    $("soloNextBtn").focus();
-    playClip(0, 0).catch(() => {});
+function showSolved(field, missed) {
+  const t = state.current, s = state.solved[field];
+  const box = $(`solved-${field}`);
+  const answer = field === "title" ? (t.fullTitle || t.title) : t.artist;
+  box.textContent = (missed ? "✗ " : "✓ ") + answer;
+  if (!missed && s) {
+    const who = isSolo() ? "" : s.by ? `${s.by} ` : "no one ";
+    const small = document.createElement("small");
+    small.textContent = s.by || isSolo() ? `${who}+${s.pts}` : "no points";
+    box.appendChild(small);
+  }
+  box.classList.toggle("missed", !!missed);
+  box.classList.remove("hidden");
+  $(`input-${field}`).parentElement.classList.add("hidden");
+  $(`pts-${field}`).textContent = "";
+}
+
+const unsolved = () => FIELDS.filter((f) => !state.solved[f]);
+
+// A field was guessed correctly.
+function solveField(field) {
+  const pts = pointsForStep(state.step);
+  if (isSolo()) {
+    state.solved[field] = { by: "You", pts };
+    state.soloPlayer.score += pts;
+    state.solo[field]++;
+    showSolved(field);
+    renderScores();
+    if (!unsolved().length) finishRound();
+    else focusNextField();
     return;
   }
-  $("awardControls").classList.remove("hidden");
-  const pts = pointsForStep(state.step);
+  // Party: ask who got it.
+  state.pending = field;
+  $("awardMsg").textContent = `✓ ${LABEL[field]} correct!`;
   $("awardPts").textContent = `(+${pts} pts)`;
   const box = $("awardButtons");
   box.innerHTML = "";
@@ -265,21 +339,80 @@ function reveal(view) {
     b.onclick = () => award(i);
     box.appendChild(b);
   });
-  // Let everyone hear the song properly once it's revealed.
-  playClip(0, 0).catch(() => {});
+  hideSuggestions();
+  $("soloBox").classList.add("hidden");
+  $("guessControls").classList.add("hidden");
+  $("awardControls").classList.remove("hidden");
 }
 
 function award(playerIndex) {
+  const field = state.pending;
+  if (!field) return;
   const pts = pointsForStep(state.step);
-  let winner = null;
-  if (playerIndex != null) {
-    state.players[playerIndex].score += pts;
-    winner = state.players[playerIndex].name;
-  }
-  state.history.push({ track: state.current, winner, pts: winner ? pts : 0 });
+  const p = playerIndex != null ? state.players[playerIndex] : null;
+  if (p) p.score += pts;
+  state.solved[field] = { by: p ? p.name : null, pts: p ? pts : 0 };
+  state.pending = null;
   renderScores();
   save();
-  nextRound();
+  showSolved(field);
+  $("awardControls").classList.add("hidden");
+  if (!unsolved().length) return finishRound();
+  const q = state.queuedAward;
+  state.queuedAward = null;
+  if (q && !state.solved[q]) return solveField(q);
+  $("soloBox").classList.remove("hidden");
+  $("guessControls").classList.remove("hidden");
+  focusNextField();
+}
+
+function focusNextField() {
+  const f = unsolved()[0];
+  if (f) $(`input-${f}`).focus();
+}
+
+// End of a round: everything solved, gave up, or (solo) out of clips.
+function finishRound() {
+  if (state.revealed) return;
+  state.revealed = true;
+  state.pending = null;
+  setStatus("");
+  hideSuggestions();
+  const t = state.current, s = state.solved;
+  FIELDS.forEach((f) => { if (!s[f]) showSolved(f, true); });
+
+  const rec = { track: t };
+  FIELDS.forEach((f) => { rec[f] = s[f] && (s[f].by || isSolo()) ? s[f] : null; });
+  state.history.push(rec);
+
+  const got = FIELDS.filter((f) => rec[f]);
+  if (isSolo()) {
+    if (got.length === 2) { state.solo.streak++; state.solo.best = Math.max(state.solo.best, state.solo.streak); }
+    else state.solo.streak = 0;
+  }
+  const msg = $("soloMsg");
+  msg.textContent = got.length === 2 ? "✓ Both correct!" : got.length ? `Half right: ${LABEL[got[0]].toLowerCase()} ✓` : isSolo() ? "✗ Not this time" : "Nobody got it";
+  msg.className = "solo-msg " + (got.length === 2 ? "win" : got.length ? "" : "lose");
+  renderScores();
+
+  $("songTitle").textContent = t.fullTitle || t.title;
+  $("songArtist").textContent = t.artist;
+  $("cover").src = t.cover;
+  $("answer").classList.remove("hidden");
+  $("mystery").classList.add("hidden");
+  $("guessControls").classList.add("hidden");
+  $("awardControls").classList.add("hidden");
+  $("soloBox").classList.remove("hidden");
+  $("guessBtn").parentElement.classList.add("hidden");
+  $("soloResult").classList.remove("hidden");
+  $("soloNextBtn").focus();
+  playClip(0, 0).catch(() => {});
+}
+
+function giveUp() {
+  if (state.revealed) return;
+  if (state.pending) award(null);
+  finishRound();
 }
 
 function endGame() {
@@ -287,9 +420,9 @@ function endGame() {
   show("end");
   const board = $("finalBoard");
   board.innerHTML = "";
+  const n = state.history.length;
   if (isSolo()) {
-    const played = state.history.length;
-    [["Score", state.soloPlayer.score], ["Correct", `${state.solo.correct} / ${played}`], ["Best streak", state.solo.best]]
+    [["Score", state.soloPlayer.score], ["Titles", `${state.solo.title} / ${n}`], ["Artists", `${state.solo.artist} / ${n}`], ["Best streak", state.solo.best]]
       .forEach(([k, v]) => board.appendChild(scoreItem({ name: k, score: v })));
   } else {
     sortedPlayers().forEach((p) => board.appendChild(scoreItem(p)));
@@ -298,8 +431,12 @@ function endGame() {
   hist.innerHTML = "";
   state.history.forEach((h) => {
     const li = document.createElement("li");
-    const result = isSolo() ? (h.winner ? `  ✓ +${h.pts}` : "  ✗") : (h.winner ? `  (${h.winner} +${h.pts})` : "  (nobody)");
-    li.textContent = `${h.track.fullTitle || h.track.title} — ${h.track.artist}` + result;
+    const part = (f) => {
+      const r = h[f];
+      if (!r) return `${LABEL[f].toLowerCase()} ✗`;
+      return isSolo() ? `${LABEL[f].toLowerCase()} +${r.pts}` : `${LABEL[f].toLowerCase()}: ${r.by} +${r.pts}`;
+    };
+    li.textContent = `${h.track.fullTitle || h.track.title} — ${h.track.artist}  (${part("title")}, ${part("artist")})`;
     hist.appendChild(li);
   });
 }
@@ -317,13 +454,26 @@ function setStatus(msg, kind, el = $("gameStatus")) {
 
 function sortedPlayers() { return state.players.slice().sort((a, b) => b.score - a.score); }
 
-function scoreItem(p) {
+function scoreItem(p, adjustable) {
   const li = document.createElement("li");
   const name = document.createElement("span");
   name.textContent = p.name;
   const score = document.createElement("b");
   score.textContent = p.score;
   li.append(name, score);
+  if (adjustable) {
+    const adj = document.createElement("div");
+    adj.className = "adj";
+    [["−", -1, "Remove a point"], ["+", 1, "Add a point"]].forEach(([label, d, title]) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.title = `${title} for ${p.name}`;
+      b.setAttribute("aria-label", b.title);
+      b.onclick = () => { p.score += d; renderScores(); };
+      adj.appendChild(b);
+    });
+    li.appendChild(adj);
+  }
   return li;
 }
 
@@ -333,11 +483,12 @@ function renderScores() {
   if (isSolo()) {
     $("soloStats").innerHTML =
       `<div><b>${state.soloPlayer.score}</b><small>points</small></div>` +
-      `<div><b>${state.solo.correct}/${state.history.length}</b><small>correct</small></div>` +
-      `<div><b>${state.solo.streak}</b><small>streak</small></div>`;
+      `<div><b>${state.solo.streak}</b><small>streak</small></div>` +
+      `<div><b>${state.solo.title}</b><small>titles</small></div>` +
+      `<div><b>${state.solo.artist}</b><small>artists</small></div>`;
     return;
   }
-  sortedPlayers().forEach((p) => board.appendChild(scoreItem(p)));
+  sortedPlayers().forEach((p) => board.appendChild(scoreItem(p, true)));
 }
 
 function renderPlayers() {
@@ -425,7 +576,7 @@ function restore() {
   } catch {}
 }
 
-// ---------------- Solo mode ----------------
+// ---------------- Mode UI ----------------
 
 function applyModeUI() {
   const solo = isSolo();
@@ -436,28 +587,25 @@ function applyModeUI() {
   $("scoreboard").classList.toggle("hidden", solo);
   $("soloStats").classList.toggle("hidden", !solo);
   $("keysHint").innerHTML = solo
-    ? "Type to search · <b>↑ ↓</b> pick · <b>Enter</b> guess"
-    : "Type what people shout · <b>Enter</b> check · outside the box: <b>Space</b> play / hear more";
-  $("guessInput").placeholder = solo ? "Type a song or artist…" : "Type a guess from the room…";
+    ? "Fill in either box · <b>↑ ↓</b> pick · <b>Enter</b> guess · <b>Tab</b> switch box"
+    : "Type what people shout · <b>Enter</b> check · outside the boxes: <b>Space</b> play / hear more";
 }
 
-const norm = (str) =>
-  (str || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+// ---------------- Autocomplete ----------------
 
-const escapeHtml = (str) => str.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const escapeHtml = (str) => String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const foldChars = (str) => str.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
 function highlight(text, words) {
   // Highlight typed words inside a suggestion, ignoring case and accents.
-  let html = "";
-  const n = norm(text);
+  const n = foldChars(text);
   if (n.length !== text.length || !words.length) return escapeHtml(text);
   const marks = new Array(text.length).fill(false);
   for (const w of words) {
     let i = n.indexOf(w);
     while (i !== -1) { for (let k = i; k < i + w.length; k++) marks[k] = true; i = n.indexOf(w, i + 1); }
   }
-  let open = false;
+  let html = "", open = false;
   for (let i = 0; i < text.length; i++) {
     if (marks[i] && !open) { html += "<mark>"; open = true; }
     if (!marks[i] && open) { html += "</mark>"; open = false; }
@@ -466,49 +614,58 @@ function highlight(text, words) {
   return html + (open ? "</mark>" : "");
 }
 
-let suggestionItems = [];
-let activeSuggestion = -1;
-
-function uniqueSongs() {
-  const seen = new Set();
-  return state.tracks.filter((t) => {
-    const key = norm(t.fullTitle) + "|" + norm(t.artist);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+// Options for each box, built once per playlist.
+let optionCache = { tracks: null, title: [], artist: [] };
+function options(field) {
+  if (optionCache.tracks !== state.tracks) {
+    const titles = new Map(), artists = new Map();
+    for (const t of state.tracks) {
+      const tk = norm(t.fullTitle);
+      if (!titles.has(tk)) titles.set(tk, { label: t.fullTitle, img: t.coverSmall || t.cover });
+      const names = [t.artist];
+      const f = (t.fullTitle || "").match(FEAT_RE);
+      if (f) names.push(...splitNames(f[1]));
+      for (const n of names) {
+        const ak = norm(n);
+        if (ak && !artists.has(ak)) artists.set(ak, { label: n, img: n === t.artist ? (t.artistPic || t.coverSmall) : "", round: true });
+      }
+    }
+    optionCache = { tracks: state.tracks, title: [...titles.values()], artist: [...artists.values()] };
+  }
+  return optionCache[field];
 }
 
-function updateSuggestions() {
-  const q = norm($("guessInput").value);
-  const box = $("suggestions");
+const sugg = { field: null, items: [], active: -1 };
+
+function updateSuggestions(field) {
+  const q = norm($(`input-${field}`).value);
   if (!q) return hideSuggestions();
+  hideSuggestions();
   const words = q.split(" ");
-  suggestionItems = uniqueSongs()
-    .map((t) => {
-      const title = norm(t.fullTitle), hay = title + " " + norm(t.artist);
+  const qf = foldChars($(`input-${field}`).value.trim());
+  const items = options(field)
+    .map((o) => {
+      const hay = norm(o.label);
       if (!words.every((w) => hay.includes(w))) return null;
-      const rank = title.startsWith(q) ? 0 : title.includes(q) ? 1 : 2;
-      return { t, rank };
+      return { o, rank: hay.startsWith(q) ? 0 : hay.includes(q) ? 1 : 2 };
     })
     .filter(Boolean)
-    .sort((a, b) => a.rank - b.rank || a.t.fullTitle.localeCompare(b.t.fullTitle))
+    .sort((a, b) => a.rank - b.rank || a.o.label.localeCompare(b.o.label))
     .slice(0, 8)
-    .map((x) => x.t);
+    .map((x) => x.o);
 
-  activeSuggestion = suggestionItems.length ? 0 : -1;
+  Object.assign(sugg, { field, items, active: items.length ? 0 : -1 });
+  const box = $(`sugg-${field}`);
   box.innerHTML = "";
-  if (!suggestionItems.length) {
-    box.innerHTML = '<li class="empty">No songs in this playlist match</li>';
-  }
-  suggestionItems.forEach((t, i) => {
+  if (!items.length) box.innerHTML = `<li class="empty">No ${field === "title" ? "songs" : "artists"} in this playlist match</li>`;
+  const hl = qf.split(/\s+/).filter(Boolean);
+  items.forEach((o) => {
     const li = document.createElement("li");
     li.setAttribute("role", "option");
-    li.innerHTML =
-      `<img src="${escapeHtml(t.coverSmall || t.cover)}" alt="" loading="lazy" />` +
-      `<div><div class="s-title">${highlight(t.fullTitle, words)}</div>` +
-      `<div class="s-artist">${highlight(t.artist, words)}</div></div>`;
-    li.onmousedown = (e) => { e.preventDefault(); submitGuess(t); };
+    if (o.round) li.classList.add("round");
+    li.innerHTML = (o.img ? `<img src="${escapeHtml(o.img)}" alt="" loading="lazy" />` : `<span class="initial">${escapeHtml(o.label.trim()[0] || "?").toUpperCase()}</span>`) +
+      `<div class="s-title">${highlight(o.label, hl)}</div>`;
+    li.onmousedown = (e) => { e.preventDefault(); submitField(field, o.label); };
     box.appendChild(li);
   });
   paintActive();
@@ -516,22 +673,27 @@ function updateSuggestions() {
 }
 
 function paintActive() {
-  [...$("suggestions").children].forEach((li, i) => li.classList.toggle("active", i === activeSuggestion));
-  const el = $("suggestions").children[activeSuggestion];
+  if (!sugg.field) return;
+  const box = $(`sugg-${sugg.field}`);
+  [...box.children].forEach((li, i) => li.classList.toggle("active", i === sugg.active));
+  const el = box.children[sugg.active];
   if (el) el.scrollIntoView({ block: "nearest" });
 }
 
 function hideSuggestions() {
-  $("suggestions").classList.add("hidden");
-  suggestionItems = [];
-  activeSuggestion = -1;
+  FIELDS.forEach((f) => $(`sugg-${f}`).classList.add("hidden"));
+  Object.assign(sugg, { field: null, items: [], active: -1 });
 }
 
-function addAttempt(text, cls) {
+// ---------------- Guessing ----------------
+
+function addAttempt(field, text) {
   const li = document.createElement("li");
-  li.className = cls;
-  li.textContent = text;
-  $("attempts").appendChild(li);
+  li.className = "wrong";
+  const b = document.createElement("b");
+  b.textContent = LABEL[field] + ":";
+  li.append(b, document.createTextNode(text));
+  $("attempts").prepend(li);
 }
 
 async function advanceOrLose() {
@@ -539,78 +701,67 @@ async function advanceOrLose() {
     state.step++;
     await play();
   } else {
-    finishSolo(false);
+    finishRound();
   }
 }
 
-function submitGuess(track) {
-  if (state.revealed) return;
-  const typed = $("guessInput").value.trim();
-  if (!track && !typed) return;
-  const cur = state.current;
-  const correct = track
-    ? track.id === cur.id || (norm(track.fullTitle) === norm(cur.fullTitle) && norm(track.artist) === norm(cur.artist))
-    : [cur.title, cur.fullTitle].some((x) => norm(x) === norm(typed));
+// Check one box. Returns true if it was correct.
+function checkField(field, value) {
+  value = (value || "").trim();
+  if (!value || state.revealed || state.pending || state.solved[field]) return null;
+  const ok = field === "title" ? titleMatches(value, state.current) : artistMatches(value, state.current);
+  $(`input-${field}`).value = "";
+  if (!ok) addAttempt(field, value);
+  return ok;
+}
+
+function submitField(field, value) {
   hideSuggestions();
-  $("guessInput").value = "";
-  if (correct) return isSolo() ? finishSolo(true) : reveal("award");
-  addAttempt(track ? `${track.fullTitle} — ${track.artist}` : typed, "wrong");
-  // Solo: a wrong guess unlocks more of the song. Party: the host decides with "Hear more".
+  const ok = checkField(field, value ?? $(`input-${field}`).value);
+  if (ok === null) return;
+  if (ok) return solveField(field);
   if (isSolo()) advanceOrLose();
-  else $("guessInput").focus();
+  else $(`input-${field}`).focus();
+}
+
+// "Guess" button: check every filled box at once.
+function submitAll() {
+  hideSuggestions();
+  const results = FIELDS.map((f) => [f, checkField(f, $(`input-${f}`).value)]).filter(([, r]) => r !== null);
+  if (!results.length) return;
+  const wrong = results.some(([, r]) => !r);
+  const right = results.filter(([, r]) => r).map(([f]) => f);
+  if (isSolo()) {
+    right.forEach((f) => solveField(f));
+    if (wrong && !state.revealed) advanceOrLose();
+  } else if (right.length) {
+    // Party: award one box at a time; the other is re-checked after.
+    if (right[1]) state.queuedAward = right[1];
+    solveField(right[0]);
+  }
 }
 
 function skip() {
   if (state.revealed) return;
-  if (state.step >= state.steps.length - 1) return finishSolo(false);
-  addAttempt(`Skipped`, "skip");
   advanceOrLose();
 }
 
-function finishSolo(won) {
-  if (state.revealed) return;
-  const pts = pointsForStep(state.step);
-  if (won) {
-    state.soloPlayer.score += pts;
-    state.solo.correct++;
-    state.solo.streak++;
-    state.solo.best = Math.max(state.solo.best, state.solo.streak);
-  } else {
-    state.solo.streak = 0;
-  }
-  state.history.push({ track: state.current, winner: won ? "You" : null, pts: won ? pts : 0 });
-  const msg = $("soloMsg");
-  msg.textContent = won ? `✓ Correct! +${pts} pts` : "✗ Not this time. It was:";
-  msg.className = "solo-msg " + (won ? "win" : "lose");
-  renderScores();
-  reveal("result");
-}
-
-// Party: nobody got it (or the host gave up) → show the answer, no points.
-function giveUp() {
-  if (state.revealed) return;
-  if (isSolo()) return finishSolo(false);
-  state.history.push({ track: state.current, winner: null, pts: 0 });
-  const msg = $("soloMsg");
-  msg.textContent = "Nobody got it. It was:";
-  msg.className = "solo-msg lose";
-  reveal("result");
-}
-
-$("guessInput").addEventListener("input", updateSuggestions);
-$("guessInput").addEventListener("focus", updateSuggestions);
-$("guessInput").addEventListener("blur", () => setTimeout(hideSuggestions, 120));
-$("guessInput").addEventListener("keydown", (e) => {
-  const n = suggestionItems.length;
-  if (e.key === "ArrowDown" && n) { e.preventDefault(); activeSuggestion = (activeSuggestion + 1) % n; paintActive(); }
-  else if (e.key === "ArrowUp" && n) { e.preventDefault(); activeSuggestion = (activeSuggestion - 1 + n) % n; paintActive(); }
-  else if (e.key === "Enter") {
-    e.preventDefault();
-    if (activeSuggestion >= 0 && n) submitGuess(suggestionItems[activeSuggestion]);
-    else submitGuess(null);
-  } else if (e.key === "Escape") hideSuggestions();
+FIELDS.forEach((f) => {
+  const input = $(`input-${f}`);
+  input.addEventListener("input", () => updateSuggestions(f));
+  input.addEventListener("focus", () => updateSuggestions(f));
+  input.addEventListener("blur", () => setTimeout(() => { if (sugg.field === f) hideSuggestions(); }, 120));
+  input.addEventListener("keydown", (e) => {
+    const n = sugg.field === f ? sugg.items.length : 0;
+    if (e.key === "ArrowDown" && n) { e.preventDefault(); sugg.active = (sugg.active + 1) % n; paintActive(); }
+    else if (e.key === "ArrowUp" && n) { e.preventDefault(); sugg.active = (sugg.active - 1 + n) % n; paintActive(); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      submitField(f, n && sugg.active >= 0 ? sugg.items[sugg.active].label : input.value);
+    } else if (e.key === "Escape") hideSuggestions();
+  });
 });
-$("guessBtn").onclick = () => submitGuess(activeSuggestion >= 0 ? suggestionItems[activeSuggestion] : null);
+$("guessBtn").onclick = submitAll;
 $("skipBtn").onclick = skip;
 $("soloNextBtn").onclick = nextRound;
 $("soloReplayBtn").onclick = () => playClip(0, 0).catch(() => {});
@@ -659,7 +810,6 @@ $("playBtn").onclick = play;
 $("moreBtn").onclick = hearMore;
 $("revealBtn").onclick = giveUp;
 $("nobodyBtn").onclick = () => award(null);
-$("replayFullBtn").onclick = () => playClip(0, 0).catch(() => {});
 $("endBtn").onclick = endGame;
 $("againBtn").onclick = () => { show("setup"); updateStartButton(); };
 
@@ -675,8 +825,8 @@ document.addEventListener("keydown", (e) => {
   } else if (e.key === "r" || e.key === "R") {
     giveUp();
   } else if (e.key === "n" || e.key === "N") {
-    if (!state.revealed) giveUp();
-    else if (!$("awardControls").classList.contains("hidden")) award(null);
+    if (state.pending) award(null);
+    else if (!state.revealed) giveUp();
     else nextRound();
   }
 });

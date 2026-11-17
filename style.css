@@ -175,3 +175,32 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
 .volume input[type=range] { flex: none; width: 120px; padding: 0; border: 0; background: none; accent-color: var(--accent); }
 #volIcon { cursor: pointer; user-select: none; }
 @media (max-width: 520px) { .volume input[type=range] { width: 90px; } }
+
+/* ---------- Title / artist fields ---------- */
+.field { margin-bottom: 12px; text-align: left; }
+.field-label { font-size: .85rem; color: var(--muted); margin: 0 0 6px 2px; display: flex; justify-content: space-between; }
+.field-pts { color: var(--accent2); font-weight: 600; }
+.solved {
+  background: #0f2a1f; border: 1px solid #1f6b4a; color: var(--ok); border-radius: 10px;
+  padding: 11px 12px; font-weight: 600;
+}
+.solved small { color: #8fd9b6; font-weight: 400; margin-left: 6px; }
+.solved.missed { background: #2a1416; border-color: #6b2a30; color: #ff8b8b; }
+.suggestions .round img { border-radius: 50%; }
+.attempts li.wrong b { color: var(--text); font-weight: 600; margin-right: 4px; }
+
+/* ---------- Score adjust ---------- */
+.scoreboard li { align-items: center; gap: 8px; }
+.scoreboard li span { flex: 1; }
+.adj { display: flex; gap: 4px; }
+.adj button {
+  width: 26px; height: 26px; border-radius: 7px; border: 1px solid var(--line); background: #0f0f16;
+  color: var(--text); cursor: pointer; font-size: .95rem; line-height: 1; padding: 0;
+}
+.adj button:hover { border-color: var(--accent); }
+.solo-stats { grid-template-columns: 1fr 1fr; }
+.suggestions .initial {
+  width: 44px; height: 44px; border-radius: 50%; flex: none; display: grid; place-items: center;
+  background: linear-gradient(135deg, var(--accent), var(--accent2)); font-weight: 700; color: white;
+}
+#soloResult { margin-top: 10px; }

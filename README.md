@@ -23,10 +23,14 @@ python3 -m http.server 8000
 3. Pick the difficulty, start position and number of rounds, then press **Start game**.
 4. Each round: **Play** a short clip. If nobody gets it, press **Hear more** for a longer clip.
    Fewer seconds heard means more points.
-5. Type what people shout into the guess box. Suggestions show the full title, artist and album cover.
+5. Type what people shout into the **Song title** and **Artist** boxes. Each has its own suggestions
+   (titles with album covers, artists with photos).
+   - Title and artist score separately, both worth the current clip's points.
+   - For songs with several artists (featured artists, duos), any one of them counts.
    - A wrong guess is listed and the round goes on.
-   - A correct guess reveals the song: tap whoever got it, or **Skip song** to give no points.
-   - **Give up** shows the answer with no points.
+   - A correct box locks in: tap whoever got it, or **No points**. The round ends when both are solved.
+   - **Give up** reveals whatever is still unsolved.
+   - Use the **−** / **+** buttons on the scoreboard to correct anyone's score.
 
 Keyboard (outside the guess box): `Space` play / hear more · `R` give up · `N` skip / next.
 
@@ -37,9 +41,8 @@ On iPhone and iPad, browsers don't let web pages change volume, so use the phone
 
 Pick **Solo** in setup (no players needed). Each round:
 
-1. **Play** the clip, then start typing a song or artist name.
-2. Suggestions from the playlist appear with the full title, artist and album cover.
-   Use the arrow keys and Enter, or tap one.
+1. **Play** the clip, then fill in the **Song title** and/or **Artist** box (each has its own suggestions).
+2. Each correct box scores separately; any of a song's artists counts.
 3. A wrong guess or **Skip** unlocks a longer clip. Run out of clips (or **Give up**) and the answer is revealed.
 
 You score more points the fewer seconds you needed, and the sidebar tracks points, correct answers and your streak.
