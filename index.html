@@ -26,6 +26,7 @@
       <h2>2. Mode</h2>
       <div class="modes">
         <label class="mode"><input type="radio" name="mode" value="party" checked /><span><b>Party</b><small>Play out loud, the host awards points</small></span></label>
+        <label class="mode"><input type="radio" name="mode" value="online" /><span><b>Online buzzer</b><small>Friends join on their phones and press "I know"</small></span></label>
         <label class="mode"><input type="radio" name="mode" value="solo" /><span><b>Solo</b><small>Type your guess, with suggestions</small></span></label>
       </div>
 
@@ -36,6 +37,26 @@
         <button id="addPlayerBtn" class="btn ghost">Add</button>
       </div>
       <ul id="playerList" class="chips"></ul>
+      </div>
+
+      <div id="roomSection" class="hidden">
+        <h2>Room</h2>
+        <div class="room">
+          <div id="roomQr" class="room-qr hidden"></div>
+          <div class="room-info">
+            <small class="muted">Room code</small>
+            <div id="roomCode" class="room-code">…</div>
+            <div class="row">
+              <input id="roomLink" type="text" readonly aria-label="Join link" />
+              <button class="btn ghost copy-link">Copy link</button>
+            </div>
+            <p class="muted small">Send this link (or show the QR code). Everyone who opens it joins your room, and other groups get their own code.</p>
+          </div>
+        </div>
+        <p id="roomStatus" class="status"></p>
+        <h3 class="small">Joined</h3>
+        <p id="roomEmpty" class="muted small">Nobody yet.</p>
+        <ul id="roomPlayers" class="chips"></ul>
       </div>
 
       <h2>3. Settings</h2>
@@ -64,6 +85,7 @@
       </div>
 
       <button id="startBtn" class="btn big" disabled>Start game</button>
+      <p id="startHint" class="status"></p>
     </section>
 
     <!-- GAME -->
@@ -83,6 +105,12 @@
           <div id="mystery" class="mystery">
             <div class="disc" id="disc">?</div>
             <div class="bars" id="bars"><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+
+          <div id="buzzPanel" class="buzz-panel hidden">
+            <div id="buzzNow" class="buzz-now"></div>
+            <div id="buzzLast" class="buzz-last"></div>
+            <ul id="frozenList" class="chips frozen"></ul>
           </div>
 
           <div id="answer" class="answer hidden">
@@ -147,6 +175,7 @@
         <aside class="card">
           <h2 id="scoresTitle">Scores</h2>
           <ol id="scoreboard" class="scoreboard"></ol>
+          <p id="roomMini" class="room-mini muted small hidden">Room <b id="miniCode"></b> <button class="btn ghost copy-link">Copy link</button></p>
           <div id="soloStats" class="solo-stats hidden"></div>
           <button id="endBtn" class="btn ghost small-btn">End game</button>
         </aside>
@@ -164,6 +193,10 @@
 
     <audio id="audio" preload="auto"></audio>
   </main>
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+  <script src="net.js"></script>
+  <script src="online.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

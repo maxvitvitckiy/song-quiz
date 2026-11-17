@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Guess the Song: join</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="wrap player-wrap">
+    <header class="top">
+      <h1>🎵 Guess the Song</h1>
+    </header>
+
+    <!-- JOIN -->
+    <section id="joinView" class="card join">
+      <label>Your name
+        <input id="nameIn" type="text" maxlength="20" autocomplete="nickname" placeholder="e.g. Max" />
+      </label>
+      <label>Room code
+        <input id="codeIn" type="text" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCDE" />
+      </label>
+      <button id="joinBtn" class="btn big">Join</button>
+      <p id="joinStatus" class="status"></p>
+    </section>
+
+    <!-- GAME -->
+    <section id="gameView" class="card hidden">
+      <div class="p-head">
+        <span id="pRound">Waiting for the host…</span>
+        <span id="pPts" class="pill hidden"></span>
+      </div>
+      <p id="pMsg" class="p-msg"></p>
+      <ul id="pSolved" class="p-solved"></ul>
+
+      <button id="buzzBtn" class="buzzer" disabled>I know!<small id="buzzSub">wait for the music</small></button>
+
+      <div id="guessView" class="p-guess hidden">
+        <div class="timer-bar"><i id="timerFill"></i></div>
+        <div class="field" id="pf-title">
+          <div class="field-label">Song title</div>
+          <div class="guess-wrap">
+            <input id="g-title" type="text" placeholder="Song title…" autocomplete="off" spellcheck="false" />
+            <ul id="s-title" class="suggestions hidden"></ul>
+          </div>
+        </div>
+        <div class="field" id="pf-artist">
+          <div class="field-label">Artist</div>
+          <div class="guess-wrap">
+            <input id="g-artist" type="text" placeholder="Artist…" autocomplete="off" spellcheck="false" />
+            <ul id="s-artist" class="suggestions hidden"></ul>
+          </div>
+        </div>
+        <button id="sendBtn" class="btn big">Send answer</button>
+        <p class="muted small">Fill in one box or both. A wrong answer freezes you until the host plays more.</p>
+      </div>
+
+      <div id="answerView" class="p-answer hidden">
+        <img id="pCover" alt="" />
+        <div>
+          <div id="pTitle" class="song-title"></div>
+          <div id="pArtist" class="song-artist"></div>
+        </div>
+      </div>
+
+      <h2 id="boardTitle">Scores</h2>
+      <ol id="pBoard" class="scoreboard"></ol>
+      <p class="muted small room-mini">Room <b id="pCode"></b> · <span id="pName"></span>
+        <button id="leaveBtn" class="btn ghost">Leave</button></p>
+    </section>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="net.js"></script>
+  <script src="player.js"></script>
+</body>
+</html>

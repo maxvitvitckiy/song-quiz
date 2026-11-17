@@ -37,6 +37,29 @@ Keyboard (outside the guess box): `Space` play / hear more · `R` give up · `N`
 Use the volume slider in the game header to set the level (remembered between games).
 On iPhone and iPad, browsers don't let web pages change volume, so use the phone's buttons there.
 
+## Online buzzer mode
+
+Everyone plays from their own phone. Only the host's computer plays music: share its sound
+with the group (for example, screen share with audio in a Discord call).
+
+1. The host picks **Online buzzer**. A room opens with a code, a link and a QR code.
+   Each host gets their own code, so several groups can play at once.
+2. Friends open the link (or `play.html` and type the code), enter a name and join.
+3. The host loads a playlist and presses **Start game**, then **Play** for each clip.
+4. Once the clip has started, players press **I know!**. The first one to press gets
+   20 seconds to type the title, the artist, or both (with suggestions from the playlist).
+   - Each correct part scores the current clip's points. The other part stays open for everyone.
+   - A wrong answer (or running out of time) **freezes** that player.
+   - **Hear more** plays a longer clip and unfreezes everyone.
+   - **Give up** reveals the song. The answer shows on every phone.
+5. A phone that reloads or loses signal rejoins under the same name and keeps its score.
+   The host can remove players from the room list and fix scores with − / +.
+
+How it works: the host's browser is the referee. Phones connect to it directly over WebRTC
+using [PeerJS](https://peerjs.com) and its free public server to find each other, so there is no
+server to run and the site still works on GitHub Pages. Some strict networks (certain mobile
+carriers, office Wi-Fi) block these connections; switching between Wi-Fi and mobile data usually fixes it.
+
 ## Solo mode
 
 Pick **Solo** in setup (no players needed). Each round:

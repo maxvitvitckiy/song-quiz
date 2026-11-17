@@ -9,7 +9,8 @@ const state = {
   sourceTitle: "",
   tracks: [],      // all playable tracks from the playlist
   queue: [],       // shuffled tracks for this game
-  players: [],     // [{ name, score }]
+  players: [],     // players in the current game: party roster or online room
+  partyPlayers: [], // [{ name, score }] typed in on the setup screen (party mode)
   round: 0,
   current: null,
   step: 0,         // index into steps (how much has been heard)
@@ -162,6 +163,7 @@ function startGame() {
   state.queue = shuffle(state.tracks);
   if (rounds > 0) state.queue = state.queue.slice(0, rounds);
   state.mode = document.querySelector('input[name="mode"]:checked').value;
+  state.players = isOnline() ? net.players : state.partyPlayers;
   if (isSolo()) state.solo = { title: 0, artist: 0, streak: 0, best: 0 };
   state.players.forEach((p) => (p.score = 0));
   state.soloPlayer = { name: "You", score: 0 };
@@ -171,6 +173,7 @@ function startGame() {
   save();
   show("game");
   renderScores();
+  if (isOnline()) netOnStart();
   nextRound();
 }
 
@@ -262,6 +265,7 @@ function nextRound() {
 
   loadAudio(state.current.preview).catch(() => {});
   loadContributors(state.current);
+  if (isOnline()) netOnRound();
 }
 
 function updateStepUI(played) {
@@ -283,6 +287,7 @@ async function play() {
     await playClip(state.offset, state.steps[state.step]);
     state.played = true;
     updateStepUI(true);
+    if (isOnline()) netOnPlayed();
   } catch (e) {
     setStatus(e.message || "Couldn't play this song.", "error");
   }
@@ -291,6 +296,7 @@ async function play() {
 async function hearMore() {
   if (state.revealed || state.step >= state.steps.length - 1) return;
   state.step++;
+  if (isOnline()) netOnHearMore();
   await play();
 }
 
@@ -407,6 +413,7 @@ function finishRound() {
   $("soloResult").classList.remove("hidden");
   $("soloNextBtn").focus();
   playClip(0, 0).catch(() => {});
+  if (isOnline()) netOnReveal();
 }
 
 function giveUp() {
@@ -418,6 +425,7 @@ function giveUp() {
 function endGame() {
   stopAudio();
   show("end");
+  if (isOnline()) netOnEnd();
   const board = $("finalBoard");
   board.innerHTML = "";
   const n = state.history.length;
@@ -457,7 +465,7 @@ function sortedPlayers() { return state.players.slice().sort((a, b) => b.score -
 function scoreItem(p, adjustable) {
   const li = document.createElement("li");
   const name = document.createElement("span");
-  name.textContent = p.name;
+  name.textContent = p.name + (p.online === false ? " · offline" : "");
   const score = document.createElement("b");
   score.textContent = p.score;
   li.append(name, score);
@@ -489,18 +497,19 @@ function renderScores() {
     return;
   }
   sortedPlayers().forEach((p) => board.appendChild(scoreItem(p, true)));
+  if (isOnline()) netBroadcast();
 }
 
 function renderPlayers() {
   const list = $("playerList");
   list.innerHTML = "";
-  state.players.forEach((p, i) => {
+  state.partyPlayers.forEach((p, i) => {
     const li = document.createElement("li");
     li.textContent = p.name;
     const x = document.createElement("button");
     x.textContent = "×";
     x.title = "Remove";
-    x.onclick = () => { state.players.splice(i, 1); renderPlayers(); save(); };
+    x.onclick = () => { state.partyPlayers.splice(i, 1); renderPlayers(); save(); };
     li.appendChild(x);
     list.appendChild(li);
   });
@@ -508,16 +517,20 @@ function renderPlayers() {
 }
 
 function updateStartButton() {
-  const solo = document.querySelector('input[name="mode"]:checked').value === "solo";
-  $("startBtn").disabled = !(state.tracks.length && (solo || state.players.length));
-  $("playersSection").classList.toggle("hidden", solo);
+  const mode = document.querySelector('input[name="mode"]:checked').value;
+  const count = mode === "online" ? net.players.length : state.partyPlayers.length;
+  $("startBtn").disabled = !(state.tracks.length && (mode === "solo" || count));
+  $("playersSection").classList.toggle("hidden", mode !== "party");
+  $("roomSection").classList.toggle("hidden", mode !== "online");
+  $("startHint").textContent = mode === "online" && state.tracks.length && !count ? "Waiting for at least one player to join the room." : "";
+  if (mode === "online") netOpen();
 }
 
 function addPlayer() {
   const name = $("playerName").value.trim();
   if (!name) return;
-  if (state.players.some((p) => p.name.toLowerCase() === name.toLowerCase())) return;
-  state.players.push({ name, score: 0 });
+  if (state.partyPlayers.some((p) => p.name.toLowerCase() === name.toLowerCase())) return;
+  state.partyPlayers.push({ name, score: 0 });
   $("playerName").value = "";
   renderPlayers();
   save();
@@ -552,7 +565,7 @@ function save() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
       source: $("source").value,
-      players: state.players.map((p) => p.name),
+      players: state.partyPlayers.map((p) => p.name),
       steps: $("steps").value,
       startPos: $("startPos").value,
       rounds: $("rounds").value,
@@ -566,7 +579,7 @@ function restore() {
     const s = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
     if (!s) return;
     $("source").value = s.source || "";
-    state.players = (s.players || []).map((name) => ({ name, score: 0 }));
+    state.partyPlayers = (s.players || []).map((name) => ({ name, score: 0 }));
     if (s.steps) $("steps").value = s.steps;
     if (s.startPos) $("startPos").value = s.startPos;
     if (s.rounds) $("rounds").value = s.rounds;
@@ -579,7 +592,9 @@ function restore() {
 // ---------------- Mode UI ----------------
 
 function applyModeUI() {
-  const solo = isSolo();
+  const solo = isSolo(), online = isOnline();
+  $("buzzPanel").classList.toggle("hidden", !online);
+  $("roomMini").classList.toggle("hidden", !online);
   $("moreBtn").classList.toggle("hidden", solo);
   $("skipBtn").classList.toggle("hidden", !solo);
   $("revealBtn").textContent = "Give up";
@@ -588,6 +603,8 @@ function applyModeUI() {
   $("soloStats").classList.toggle("hidden", !solo);
   $("keysHint").innerHTML = solo
     ? "Fill in either box · <b>↑ ↓</b> pick · <b>Enter</b> guess · <b>Tab</b> switch box"
+    : online
+    ? "Players buzz and guess on their phones · <b>Space</b> play / hear more (unfreezes everyone) · <b>R</b> give up · <b>N</b> next"
     : "Type what people shout · <b>Enter</b> check · outside the boxes: <b>Space</b> play / hear more";
 }
 
@@ -811,7 +828,8 @@ $("moreBtn").onclick = hearMore;
 $("revealBtn").onclick = giveUp;
 $("nobodyBtn").onclick = () => award(null);
 $("endBtn").onclick = endGame;
-$("againBtn").onclick = () => { show("setup"); updateStartButton(); };
+$("againBtn").onclick = () => { show("setup"); updateStartButton(); if (isOnline()) netOnSetup(); };
+document.querySelectorAll(".copy-link").forEach((b) => (b.onclick = copyLink));
 
 document.addEventListener("keydown", (e) => {
   if ($("game").classList.contains("hidden")) return;
