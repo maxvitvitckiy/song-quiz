@@ -1,7 +1,9 @@
 // Online buzzer mode, host side.
 // The host's browser is the referee: it owns the room, decides who buzzed first,
 // checks guesses, gives points, freezes wrong guessers and unfreezes everyone on
-// "Hear more". Players' phones (play.html) only send "hello", "buzz" and "guess".
+// "Hear more". Players' phones (play.html) only send "hello", "buzz", "guess" and "vote".
+// Votes: more than half the players asking for "Hear more" plays the longer clip,
+// everyone pressing "Give up" reveals the song. The host's own buttons skip the vote.
 // Audio plays on the host only (stream it to your friends, e.g. over Discord).
 
 const ANSWER_SECONDS = 20;
@@ -20,6 +22,7 @@ const net = {
   ticker: null,
   frozen: new Set(),    // names that can't buzz until "Hear more"
   last: null,           // result of the latest guess, shown to everyone
+  votes: { more: new Set(), giveup: new Set() }, // names voting for "Hear more" / "Give up"
 };
 
 const isOnline = () => state.mode === "online";
@@ -91,6 +94,7 @@ function acceptConnection(conn) {
     renderRoomPlayers();
     if (!$("game").classList.contains("hidden")) renderScores();
     netBroadcast();
+    checkVotes();
   });
 }
 
@@ -112,6 +116,7 @@ function heartbeat() {
   renderRoomPlayers();
   if (!$("game").classList.contains("hidden")) { renderScores(); renderBuzz(); }
   netBroadcast();
+  checkVotes();
 }
 
 function send(conn, msg) { try { if (conn && conn.open) conn.send(msg); } catch {} }
@@ -124,6 +129,7 @@ function onPlayerMessage(conn, msg) {
   p.seen = Date.now();
   if (msg.t === "buzz") onBuzz(p);
   else if (msg.t === "guess") onGuess(p, msg);
+  else if (msg.t === "vote") onVote(p, msg);
 }
 
 function onHello(conn, msg) {
@@ -156,9 +162,13 @@ function kick(p) {
   send(p.conn, { t: "kicked" });
   setTimeout(() => { try { p.conn.close(); } catch {} }, 200);
   net.players.splice(net.players.indexOf(p), 1);
+  net.votes.more.delete(p.name);
+  net.votes.giveup.delete(p.name);
   renderRoomPlayers();
   updateStartButton();
+  renderBuzz();
   netBroadcast();
+  checkVotes();
 }
 
 // ---------------- Buzzing and guessing ----------------
@@ -213,6 +223,54 @@ function onGuess(p, msg) {
   if (!unsolved().length) return finishRound();
   renderBuzz();
   netBroadcast();
+  checkVotes();   // a vote that passed while this player was answering goes through now
+}
+
+// ---------------- Voting: "Hear more" and "Give up" ----------------
+
+const canHearMore = () => state.step < state.steps.length - 1;
+const votingOpen = () => net.phase === "open" && !state.revealed;
+
+function onVote(p, msg) {
+  const kind = msg.kind === "more" ? "more" : msg.kind === "giveup" ? "giveup" : null;
+  if (!kind || !votingOpen() || (kind === "more" && !canHearMore())) return netBroadcast();
+  if (msg.on) net.votes[kind].add(p.name);
+  else net.votes[kind].delete(p.name);
+  renderBuzz();
+  netBroadcast();
+  checkVotes();
+}
+
+// Only players who are still connected count, both for the votes and for the total.
+function voteCount() {
+  const v = votesMessage();
+  return { ...v, more: v.more.length, giveup: v.giveup.length };
+}
+
+function votesMessage() {
+  const here = net.players.filter((p) => p.online).map((p) => p.name);
+  return {
+    players: here.length,
+    more: here.filter((name) => net.votes.more.has(name)),
+    giveup: here.filter((name) => net.votes.giveup.has(name)),
+    moreNeed: Math.floor(here.length / 2) + 1,   // more than half
+    giveupNeed: here.length,                     // everyone
+  };
+}
+
+// Votes wait while someone is answering, so the music doesn't start (or the answer
+// show) in the middle of their turn.
+function checkVotes() {
+  if (!votingOpen() || net.buzzer) return;
+  const v = voteCount();
+  if (!v.players) return;
+  if (v.giveup >= v.giveupNeed) return giveUp();
+  if (v.more >= v.moreNeed && canHearMore()) hearMore();
+}
+
+function clearVotes() {
+  net.votes.more.clear();
+  net.votes.giveup.clear();
 }
 
 function everyoneFrozen() {
@@ -224,6 +282,7 @@ function everyoneFrozen() {
 
 function netOnStart() {
   net.frozen.clear();
+  clearVotes();
   net.last = null;
   net.buzzer = null;
   netBroadcastAll(optionsMessage());
@@ -235,6 +294,7 @@ function netOnRound() {
   net.phase = "waiting";
   net.buzzer = null;
   net.frozen.clear();
+  clearVotes();
   net.last = null;
   hostInputs(false);
   renderBuzz();
@@ -247,9 +307,11 @@ function netOnPlayed() {
   netBroadcast();
 }
 
-// "Hear more" unfreezes everyone. Anyone still answering keeps their turn.
+// "Hear more" (the host's button or a passed vote) unfreezes everyone and starts a
+// new "Hear more" vote. Give-up votes stay. Anyone still answering keeps their turn.
 function netOnHearMore() {
   net.frozen.clear();
+  net.votes.more.clear();
   renderBuzz();
   netBroadcast();
 }
@@ -305,6 +367,7 @@ function stateMessage() {
     buzzer: net.buzzer,
     remaining: net.buzzer ? Math.max(0, net.deadline - Date.now()) : 0,
     frozen: [...net.frozen],
+    votes: votesMessage(),
     solved,
     last: net.last,
     players: net.players.map((p) => ({ name: p.name, score: p.score, online: p.online })),
@@ -380,6 +443,14 @@ function renderBuzz() {
       now.classList.add("warn");
     } else now.textContent = "Buzzers are open";
   } else now.textContent = "";
+
+  const v = voteCount();
+  const votes = $("buzzVotes");
+  const showVotes = net.phase === "open" && v.players > 0 && (v.more || v.giveup);
+  votes.textContent = !showVotes ? "" : [
+    canHearMore() ? `🔊 Hear more ${v.more}/${v.moreNeed}` : "",
+    `🏳 Give up ${v.giveup}/${v.giveupNeed}`,
+  ].filter(Boolean).join(" · ") + (net.buzzer ? " (waits for the answer)" : "");
 
   const last = net.last;
   const box = $("buzzLast");

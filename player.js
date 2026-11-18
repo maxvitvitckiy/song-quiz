@@ -186,6 +186,8 @@ function render() {
     s.buzzer ? `${s.buzzer} is answering` :
     frozen ? "until the host plays more" : "tap if you know it";
 
+  renderVotes(s, mine);
+
   // Our turn to answer.
   if (mine && !guessing) openGuess(s);
   if (!mine && guessing) closeGuess();
@@ -223,6 +225,38 @@ function render() {
     li.append(n, b);
     board.appendChild(li);
   });
+}
+
+// "Hear more" needs more than half the players, "Give up" needs everyone.
+// Tapping again takes the vote back.
+function renderVotes(s, mine) {
+  const v = s.votes || { more: [], giveup: [], players: 0, moreNeed: 1, giveupNeed: 1 };
+  const show = (s.phase === "waiting" || s.phase === "open") && !mine;
+  $("voteRow").classList.toggle("hidden", !show);
+  if (!show) return;
+  const open = s.phase === "open";
+  const set = (id, kind, label, need, can) => {
+    const b = $(id), on = v[kind].includes(me.name);
+    // first node is the label text, last is the <small> count
+    b.firstChild.textContent = label;
+    b.lastChild.textContent = open && can ? `${v[kind].length} / ${need}` : "";
+    b.disabled = !open || !can;
+    b.classList.toggle("on", on && open);
+    b.setAttribute("aria-pressed", String(on && open));
+  };
+  set("moreVote", "more", s.nextSeconds ? `🔊 Hear more (${s.nextSeconds}s)` : "🔊 Hear more", v.moreNeed, !!s.nextSeconds);
+  set("giveupVote", "giveup", "🏳 Give up", v.giveupNeed, true);
+}
+
+function vote(kind) {
+  if (!view || view.phase !== "open") return;
+  const list = (view.votes && view.votes[kind]) || [];
+  const on = !list.includes(me.name);
+  // Show the tap right away; the host's next update has the real count.
+  view.votes[kind] = on ? list.concat(me.name) : list.filter((n) => n !== me.name);
+  send({ t: "vote", kind, on });
+  if (navigator.vibrate) navigator.vibrate(20);
+  render();
 }
 
 function messageFor(s, frozen, mine) {
@@ -399,6 +433,8 @@ $("sendBtn").onclick = () => { if (Date.now() - pickedAt > 400) sendGuess(); };
 document.addEventListener("pointercancel", () => (pressing = false));
 document.addEventListener("pointerup", (e) => { if (!e.target.closest || !e.target.closest(".suggestions")) pressing = false; });
 $("leaveBtn").onclick = leave;
+$("moreVote").onclick = () => vote("more");
+$("giveupVote").onclick = () => vote("giveup");
 document.addEventListener("keydown", (e) => {
   if (e.code === "Space" && e.target.tagName !== "INPUT" && !$("gameView").classList.contains("hidden")) { e.preventDefault(); buzz(); }
 });

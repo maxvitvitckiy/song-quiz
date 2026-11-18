@@ -62,6 +62,10 @@ with the group (for example, screen share with audio in a Discord call).
    - A wrong answer (or running out of time) **freezes** that player.
    - **Hear more** plays a longer clip and unfreezes everyone.
    - **Give up** reveals the song. The answer shows on every phone.
+   - Players can vote from their phones too. Once more than half of them press **Hear more**,
+     the longer clip plays by itself. Once everyone presses **Give up**, the song is revealed.
+     Tap again to take a vote back. A vote that passes while someone is answering waits for their answer.
+     The host's own buttons work straight away, without a vote.
 5. A phone that reloads or loses signal rejoins under the same name and keeps its score.
    The host can remove players from the room list and fix scores with − / +.
 
