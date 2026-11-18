@@ -137,7 +137,8 @@ function onMessage(msg) {
     leave();
     status("The host removed you from the room.", "error");
   } else if (msg.t === "options") {
-    options = { title: msg.title || [], artist: msg.artist || [] };
+    const prep = (list) => (list || []).map((o) => prepOption({ label: String(o.label || ""), img: o.img || "", round: !!o.round }, String(o.label || "")));
+    options = { title: prep(msg.title), artist: prep(msg.artist) };
   } else if (msg.t === "state") {
     view = msg;
     render();
@@ -312,23 +313,15 @@ function sendGuess() {
 
 // ---------------- Suggestions ----------------
 
-const norm = (str) =>
-  (str || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
-    .replace(/&/g, " and ").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+// norm(), loose() and searchOptions() come from match.js: "Zori" finds "Зорі" and the other way round.
 const escapeHtml = (str) => String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const sugg = { field: null, items: [], active: -1 };
+let pressing = false;      // a finger is down on a suggestion
+let pickedAt = 0;          // when a suggestion was last picked
 
 function suggest(field) {
-  const q = norm($(`g-${field}`).value);
   hideSuggestions();
-  if (!q) return;
-  const words = q.split(" ");
-  const items = (options[field] || [])
-    .map((o) => { const h = norm(o.label); return words.every((w) => h.includes(w)) ? { o, r: h.startsWith(q) ? 0 : h.includes(q) ? 1 : 2 } : null; })
-    .filter(Boolean)
-    .sort((a, b) => a.r - b.r || a.o.label.localeCompare(b.o.label))
-    .slice(0, 6)
-    .map((x) => x.o);
+  const items = searchOptions(options[field] || [], $(`g-${field}`).value);
   if (!items.length) return;
   Object.assign(sugg, { field, items, active: 0 });
   const box = $(`s-${field}`);
@@ -336,9 +329,12 @@ function suggest(field) {
   items.forEach((o, i) => {
     const li = document.createElement("li");
     if (o.round) li.classList.add("round");
-    li.innerHTML = (o.img ? `<img src="${escapeHtml(o.img)}" alt="" loading="lazy" />` : `<span class="initial">${escapeHtml((o.label.trim()[0] || "?").toUpperCase())}</span>`) +
+    li.innerHTML = (o.img ? `<img src="${escapeHtml(o.img)}" alt="" loading="lazy" />` : o.round ? `<span class="initial">${escapeHtml((o.label.trim()[0] || "?").toUpperCase())}</span>` : "") +
       `<div class="s-title">${escapeHtml(o.label)}</div>`;
-    li.addEventListener("pointerdown", (e) => { e.preventDefault(); pick(field, i); });
+    // Pick on click, not on touch-down: the list would close under the finger and the
+    // rest of the tap would land on whatever is underneath (often the Send button).
+    li.addEventListener("pointerdown", (e) => { e.preventDefault(); pressing = true; });
+    li.addEventListener("click", (e) => { e.preventDefault(); pressing = false; pick(field, i); });
     box.appendChild(li);
   });
   paint();
@@ -350,13 +346,15 @@ function paint() {
   [...$(`s-${sugg.field}`).children].forEach((li, i) => li.classList.toggle("active", i === sugg.active));
 }
 
+// Picking a suggestion only fills the box. Sending is always its own tap on Send.
 function pick(field, i) {
   $(`g-${field}`).value = sugg.items[i].label;
   hideSuggestions();
-  // Jump to the other open box if it's empty, otherwise stay so they can send.
+  pickedAt = Date.now();
+  // Jump to the other open box if it's empty; otherwise close the keyboard so Send is in view.
   const other = FIELDS.find((f) => f !== field && !$(`pf-${f}`).classList.contains("hidden") && !$(`g-${f}`).value);
   if (other) $(`g-${other}`).focus();
-  else $("sendBtn").focus();
+  else $(`g-${field}`).blur();
 }
 
 function hideSuggestions() {
@@ -367,7 +365,7 @@ function hideSuggestions() {
 FIELDS.forEach((f) => {
   const input = $(`g-${f}`);
   input.addEventListener("input", () => suggest(f));
-  input.addEventListener("blur", () => setTimeout(() => { if (sugg.field === f) hideSuggestions(); }, 150));
+  input.addEventListener("blur", () => setTimeout(() => { if (sugg.field === f && !pressing) hideSuggestions(); }, 150));
   input.addEventListener("keydown", (e) => {
     const n = sugg.field === f ? sugg.items.length : 0;
     if (e.key === "ArrowDown" && n) { e.preventDefault(); sugg.active = (sugg.active + 1) % n; paint(); }
@@ -396,7 +394,10 @@ $("joinBtn").onclick = join;
 ["nameIn", "codeIn"].forEach((id) => $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") join(); }));
 $("buzzBtn").addEventListener("pointerdown", (e) => { e.preventDefault(); buzz(); });
 $("buzzBtn").addEventListener("click", buzz);
-$("sendBtn").onclick = sendGuess;
+// A tap that started on a suggestion can still end up here on some phones; ignore it.
+$("sendBtn").onclick = () => { if (Date.now() - pickedAt > 400) sendGuess(); };
+document.addEventListener("pointercancel", () => (pressing = false));
+document.addEventListener("pointerup", (e) => { if (!e.target.closest || !e.target.closest(".suggestions")) pressing = false; });
 $("leaveBtn").onclick = leave;
 document.addEventListener("keydown", (e) => {
   if (e.code === "Space" && e.target.tagName !== "INPUT" && !$("gameView").classList.contains("hidden")) { e.preventDefault(); buzz(); }

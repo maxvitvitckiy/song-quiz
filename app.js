@@ -252,9 +252,7 @@ function startGame() {
 
 // ---------------- Answer matching ----------------
 
-const norm = (str) =>
-  (str || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
-    .replace(/&/g, " and ").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+// norm(), loose(), sameText() and searchOptions() live in match.js (shared with the phones).
 
 // "Song (feat. X) [Remix] - Radio Edit" → "Song"
 const baseTitle = (t) => (t || "").replace(/\s*[\(\[][^\)\]]*[\)\]]/g, "").replace(/\s+-\s+.*$/, "").trim();
@@ -265,25 +263,23 @@ const splitNames = (s) => (s || "").split(/\s*(?:,|&|\band\b|\bx\b|\+|\/)\s*/i).
 // Every artist name that counts for a track: main artist (whole and split), featured artists
 // from the title, and contributors fetched from Deezer at the start of the round.
 function artistNames(track) {
-  const names = new Set();
-  const add = (n) => { const k = norm(n); if (k) names.add(k); };
-  add(track.artist);
-  splitNames(track.artist).forEach(add);
+  const names = [track.artist, ...splitNames(track.artist)];
   const f = (track.fullTitle || "").match(FEAT_RE);
-  if (f) splitNames(f[1]).forEach(add);
-  (track.contributors || []).forEach(add);
-  return names;
+  if (f) names.push(...splitNames(f[1]));
+  names.push(...(track.contributors || []));
+  return names.filter((n) => norm(n));
 }
 
+// Matches ignore case, accents and punctuation, and also work across alphabets
+// and spellings ("Zori" = "Зорі", "Okean Elzy" = "Океан Ельзи").
 function titleMatches(guess, track) {
-  const g = norm(guess), gb = norm(baseTitle(guess));
-  return [track.title, track.fullTitle].some((t) => norm(t) === g || norm(baseTitle(t)) === gb) && gb !== "";
+  if (!norm(baseTitle(guess)) && !loose(baseTitle(guess))) return false;
+  return [track.title, track.fullTitle].some((t) => sameText(guess, t) || sameText(baseTitle(guess), baseTitle(t)));
 }
 
 function artistMatches(guess, track) {
   const names = artistNames(track);
-  const g = norm(guess);
-  return names.has(g) || splitNames(guess).some((p) => names.has(norm(p)));
+  return [guess, ...splitNames(guess)].some((g) => names.some((n) => sameText(g, n)));
 }
 
 async function loadContributors(track) {
@@ -298,7 +294,7 @@ async function loadContributors(track) {
 // ---------------- Rounds ----------------
 
 const FIELDS = ["title", "artist"];
-const LABEL = { title: "Title", artist: "Artist" };
+const LABEL = { title: "Title", artist: "Artist", song: "Guess" };
 
 function nextRound() {
   stopAudio();
@@ -330,6 +326,8 @@ function nextRound() {
     $(`input-${f}`).parentElement.classList.remove("hidden");
     $(`solved-${f}`).classList.add("hidden");
   });
+  $("input-song").value = "";
+  $("field-song").classList.remove("hidden");
   hideSuggestions();
   $("moreBtn").disabled = true;
   $("playBtn").disabled = false;
@@ -346,6 +344,7 @@ function updateStepUI(played) {
   const p = pointsForStep(state.step);
   $("pointsLabel").textContent = `${p} pts each`;
   FIELDS.forEach((f) => ($(`pts-${f}`).textContent = state.solved && state.solved[f] ? "" : `+${p}`));
+  updateSongPts();
   $("playBtn").textContent = played ? `↺ Replay ${s}s` : `▶ Play ${s}s`;
   const next = state.steps[state.step + 1];
   $("moreBtn").textContent = next ? `Hear more (${next}s)` : "Hear more";
@@ -373,6 +372,12 @@ async function hearMore() {
   await play();
 }
 
+// Solo's single box says what's still worth points: "+4 title · +4 artist".
+function updateSongPts() {
+  const p = pointsForStep(state.step);
+  $("pts-song").textContent = unsolved().map((f) => `+${p} ${f}`).join(" · ");
+}
+
 function showSolved(field, missed) {
   const t = state.current, s = state.solved[field];
   const box = $(`solved-${field}`);
@@ -388,6 +393,7 @@ function showSolved(field, missed) {
   box.classList.remove("hidden");
   $(`input-${field}`).parentElement.classList.add("hidden");
   $(`pts-${field}`).textContent = "";
+  updateSongPts();
 }
 
 const unsolved = () => FIELDS.filter((f) => !state.solved[f]);
@@ -447,7 +453,7 @@ function award(playerIndex) {
 
 function focusNextField() {
   const f = unsolved()[0];
-  if (f) $(`input-${f}`).focus();
+  if (f) $(isSolo() ? "input-song" : `input-${f}`).focus();
 }
 
 // End of a round: everything solved, gave up, or (solo) out of clips.
@@ -486,6 +492,7 @@ function finishRound() {
   $("awardControls").classList.add("hidden");
   $("soloBox").classList.remove("hidden");
   $("guessBtn").parentElement.classList.add("hidden");
+  $("field-song").classList.add("hidden");
   $("soloResult").classList.remove("hidden");
   $("soloNextBtn").focus();
   playClip(0, 0).catch(() => {});
@@ -784,6 +791,7 @@ function applyModeUI() {
   const solo = isSolo(), online = isOnline();
   $("buzzPanel").classList.toggle("hidden", !online);
   $("roomMini").classList.toggle("hidden", !online);
+  $("soloBox").classList.toggle("single", solo);
   $("moreBtn").classList.toggle("hidden", solo);
   $("skipBtn").classList.toggle("hidden", !solo);
   $("revealBtn").textContent = "Give up";
@@ -791,7 +799,7 @@ function applyModeUI() {
   $("scoreboard").classList.toggle("hidden", solo);
   $("soloStats").classList.toggle("hidden", !solo);
   $("keysHint").innerHTML = solo
-    ? "Fill in either box · <b>↑ ↓</b> pick · <b>Enter</b> guess · <b>Tab</b> switch box"
+    ? "Type a song or artist · <b>↑ ↓</b> pick · <b>Enter</b> guess · title and artist score separately"
     : online
     ? "Players buzz and guess on their phones · <b>Space</b> play / hear more (unfreezes everyone) · <b>R</b> give up · <b>N</b> next"
     : "Type what people shout · <b>Enter</b> check · outside the boxes: <b>Space</b> play / hear more";
@@ -821,61 +829,68 @@ function highlight(text, words) {
 }
 
 // Options for each box, built once per playlist.
-let optionCache = { tracks: null, title: [], artist: [] };
+//  title  — song titles, text only (an album cover would give the answer away)
+//  artist — artist names, with the artist's photo when Deezer has one
+//  song   — solo mode's single box: one row per song, title + artist + cover
+let optionCache = { tracks: null, title: [], artist: [], song: [] };
 function options(field) {
   if (optionCache.tracks !== state.tracks) {
-    const titles = new Map(), artists = new Map();
+    const titles = new Map(), artists = new Map(), songs = new Map();
     for (const t of state.tracks) {
       const tk = norm(t.fullTitle);
-      if (!titles.has(tk)) titles.set(tk, { label: t.fullTitle, img: t.coverSmall || t.cover });
+      if (!titles.has(tk)) titles.set(tk, prepOption({ label: t.fullTitle }, t.fullTitle));
+      const sk = tk + "|" + norm(t.artist);
+      if (!songs.has(sk)) songs.set(sk, prepOption({ label: t.fullTitle, sub: t.artist, img: t.coverSmall || t.cover, track: t }, t.fullTitle + " " + t.artist, t.fullTitle));
       const names = [t.artist];
       const f = (t.fullTitle || "").match(FEAT_RE);
       if (f) names.push(...splitNames(f[1]));
       for (const n of names) {
         const ak = norm(n);
-        if (ak && !artists.has(ak)) artists.set(ak, { label: n, img: n === t.artist ? (t.artistPic || t.coverSmall) : "", round: true });
+        if (ak && !artists.has(ak)) artists.set(ak, prepOption({ label: n, img: n === t.artist ? t.artistPic || "" : "", round: true }, n));
       }
     }
-    optionCache = { tracks: state.tracks, title: [...titles.values()], artist: [...artists.values()] };
+    optionCache = { tracks: state.tracks, title: [...titles.values()], artist: [...artists.values()], song: [...songs.values()] };
   }
   return optionCache[field];
 }
 
 const sugg = { field: null, items: [], active: -1 };
+const SUGG_FIELDS = ["title", "artist", "song"];
+const EMPTY = { title: "No songs in this playlist match", artist: "No artists in this playlist match", song: "No songs or artists in this playlist match" };
+
+function optionIcon(o) {
+  if (o.img) return `<img src="${escapeHtml(o.img)}" alt="" loading="lazy" />`;
+  if (o.round) return `<span class="initial">${escapeHtml((o.label.trim()[0] || "?").toUpperCase())}</span>`;
+  return "";
+}
 
 function updateSuggestions(field) {
-  const q = norm($(`input-${field}`).value);
-  if (!q) return hideSuggestions();
+  const typed = $(`input-${field}`).value;
   hideSuggestions();
-  const words = q.split(" ");
-  const qf = foldChars($(`input-${field}`).value.trim());
-  const items = options(field)
-    .map((o) => {
-      const hay = norm(o.label);
-      if (!words.every((w) => hay.includes(w))) return null;
-      return { o, rank: hay.startsWith(q) ? 0 : hay.includes(q) ? 1 : 2 };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.rank - b.rank || a.o.label.localeCompare(b.o.label))
-    .slice(0, 8)
-    .map((x) => x.o);
-
+  if (!enoughTyped(typed)) return;
+  const items = searchOptions(options(field), typed);
   Object.assign(sugg, { field, items, active: items.length ? 0 : -1 });
   const box = $(`sugg-${field}`);
   box.innerHTML = "";
-  if (!items.length) box.innerHTML = `<li class="empty">No ${field === "title" ? "songs" : "artists"} in this playlist match</li>`;
-  const hl = qf.split(/\s+/).filter(Boolean);
+  if (!items.length) box.innerHTML = `<li class="empty">${EMPTY[field]}</li>`;
+  const hl = foldChars(typed.trim()).split(/\s+/).filter(Boolean);
   items.forEach((o) => {
     const li = document.createElement("li");
     li.setAttribute("role", "option");
     if (o.round) li.classList.add("round");
-    li.innerHTML = (o.img ? `<img src="${escapeHtml(o.img)}" alt="" loading="lazy" />` : `<span class="initial">${escapeHtml(o.label.trim()[0] || "?").toUpperCase()}</span>`) +
-      `<div class="s-title">${highlight(o.label, hl)}</div>`;
-    li.onmousedown = (e) => { e.preventDefault(); submitField(field, o.label); };
+    li.innerHTML = optionIcon(o) +
+      `<div><div class="s-title">${highlight(o.label, hl)}</div>` +
+      (o.sub ? `<div class="s-artist">${highlight(o.sub, hl)}</div>` : "") + `</div>`;
+    li.onmousedown = (e) => { e.preventDefault(); pickOption(field, o); };
     box.appendChild(li);
   });
   paintActive();
   box.classList.remove("hidden");
+}
+
+function pickOption(field, o) {
+  if (field === "song") submitSong(o);
+  else submitField(field, o.label);
 }
 
 function paintActive() {
@@ -887,7 +902,7 @@ function paintActive() {
 }
 
 function hideSuggestions() {
-  FIELDS.forEach((f) => $(`sugg-${f}`).classList.add("hidden"));
+  SUGG_FIELDS.forEach((f) => $(`sugg-${f}`).classList.add("hidden"));
   Object.assign(sugg, { field: null, items: [], active: -1 });
 }
 
@@ -947,6 +962,24 @@ function submitAll() {
   }
 }
 
+// Solo: one box for the whole song. Title and artist still score separately, so picking
+// another song with the same name still counts the title, and picking any song by the
+// right artist counts the artist. Only a guess with nothing new right unlocks a longer clip.
+function submitSong(option) {
+  hideSuggestions();
+  const input = $("input-song");
+  const typed = input.value.trim();
+  if (state.revealed || (!option && !typed)) return;
+  input.value = "";
+  const cur = state.current;
+  const right = unsolved().filter((f) => option
+    ? (f === "title" ? titleMatches(option.track.fullTitle, cur) || titleMatches(option.track.title, cur) : artistMatches(option.track.artist, cur))
+    : (f === "title" ? titleMatches(typed, cur) : artistMatches(typed, cur)));
+  if (right.length) return right.forEach((f) => { if (!state.revealed) solveField(f); });
+  addAttempt("song", option ? `${option.label} — ${option.sub}` : typed);
+  advanceOrLose();
+}
+
 function skip() {
   if (state.revealed) return;
   advanceOrLose();
@@ -967,7 +1000,22 @@ FIELDS.forEach((f) => {
     } else if (e.key === "Escape") hideSuggestions();
   });
 });
-$("guessBtn").onclick = submitAll;
+const songInput = $("input-song");
+songInput.addEventListener("input", () => updateSuggestions("song"));
+songInput.addEventListener("focus", () => updateSuggestions("song"));
+songInput.addEventListener("blur", () => setTimeout(() => { if (sugg.field === "song") hideSuggestions(); }, 120));
+songInput.addEventListener("keydown", (e) => {
+  const n = sugg.field === "song" ? sugg.items.length : 0;
+  if (e.key === "ArrowDown" && n) { e.preventDefault(); sugg.active = (sugg.active + 1) % n; paintActive(); }
+  else if (e.key === "ArrowUp" && n) { e.preventDefault(); sugg.active = (sugg.active - 1 + n) % n; paintActive(); }
+  else if (e.key === "Enter") { e.preventDefault(); submitSong(n && sugg.active >= 0 ? sugg.items[sugg.active] : null); }
+  else if (e.key === "Escape") hideSuggestions();
+});
+$("guessBtn").onclick = () => {
+  if (!isSolo()) return submitAll();
+  const n = sugg.field === "song" ? sugg.items.length : 0;
+  submitSong(n && sugg.active >= 0 ? sugg.items[sugg.active] : null);
+};
 $("skipBtn").onclick = skip;
 $("soloNextBtn").onclick = nextRound;
 $("soloReplayBtn").onclick = () => playClip(0, 0).catch(() => {});

@@ -30,7 +30,11 @@ python3 -m http.server 8000
 4. Each round: **Play** a short clip. If nobody gets it, press **Hear more** for a longer clip.
    Fewer seconds heard means more points.
 5. Type what people shout into the **Song title** and **Artist** boxes. Each has its own suggestions
-   (titles with album covers, artists with photos).
+   (titles as plain text so no album cover gives the answer away, artists with photos).
+   - Suggestions start after 3 letters, match the start of a word only ("hom" finds "Home", "ome" doesn't)
+     and show at most 4, so they help with spelling without giving the answer away.
+   - Spelling is forgiving across alphabets: `Zori` finds and counts for `Зорі`, `Okean Elzy` (or `Ocean Elzi`)
+     for `Океан Ельзи`, and the other way round.
    - Title and artist score separately, both worth the current clip's points.
    - For songs with several artists (featured artists, duos), any one of them counts.
    - A wrong guess is listed and the round goes on.
@@ -70,8 +74,11 @@ carriers, office Wi-Fi) block these connections; switching between Wi-Fi and mob
 
 Pick **Solo** in setup (no players needed). Each round:
 
-1. **Play** the clip, then fill in the **Song title** and/or **Artist** box (each has its own suggestions).
-2. Each correct box scores separately; any of a song's artists counts.
+1. **Play** the clip, then type in the single box: a song title or an artist. Suggestions show each song
+   with its cover and artist, and Latin / Cyrillic spellings find each other (`Zori` finds `Зорі`).
+2. Title and artist score separately. Picking a song with the right title but another artist (two songs
+   called "Home") still counts the title, and picking any song by the right artist counts the artist.
+   Only a guess with nothing new right counts as wrong.
 3. A wrong guess or **Skip** unlocks a longer clip. Run out of clips (or **Give up**) and the answer is revealed.
 
 You score more points the fewer seconds you needed, and the sidebar tracks points, correct answers and your streak.
