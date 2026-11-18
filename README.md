@@ -19,9 +19,12 @@ python3 -m http.server 8000
 
 1. Paste a public Deezer playlist or album link, e.g. `https://www.deezer.com/playlist/1234567`, and press **Add**.
    Short share links (`link.deezer.com/...`) don't work. Open them in the browser first and copy the full address.
-   Add as many playlists as you like. Each round picks a random playlist, then a random song from it, so a small
-   playlist comes up as often as a big one. A song in two playlists is only played once. When there's more than one
-   playlist, the answer shows which playlist the song came from (on phones too, and in the end-of-game list).
+   Add as many playlists as you like. Each one shows how many songs the game takes from it. The **Rounds** box is
+   split evenly (10 rounds over 3 playlists = 4, 3, 3); change any playlist's number with − / + or by typing, and
+   the rounds total follows. **Split evenly** and **Use all songs** reset the numbers. A playlist never gives more
+   songs than it has, and a song in two playlists is only played once. The chosen songs are shuffled together.
+   When there's more than one playlist, the answer shows which playlist the song came from (on phones too, and in
+   the end-of-game list).
 2. Add players or teams.
 3. Pick the difficulty, start position and number of rounds, then press **Start game**.
 4. Each round: **Play** a short clip. If nobody gets it, press **Hear more** for a longer clip.

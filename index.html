@@ -16,12 +16,13 @@
     <!-- SETUP -->
     <section id="setup" class="card">
       <h2>1. Playlists</h2>
-      <p class="muted small">Paste a Deezer playlist or album link (e.g. <code>https://www.deezer.com/playlist/1234567</code>) or just its number, then press Add. Add as many as you like: each round picks a random playlist, then a random song from it. Playlists must be public.</p>
+      <p class="muted small">Paste a Deezer playlist or album link (e.g. <code>https://www.deezer.com/playlist/1234567</code>) or just its number, then press Add. Add as many as you like and choose how many songs come from each. Playlists must be public.</p>
       <div class="row">
         <input id="source" type="text" placeholder="https://www.deezer.com/playlist/…" autocomplete="off" />
         <button id="loadBtn" class="btn">Add</button>
       </div>
-      <ul id="sourceList" class="chips sources"></ul>
+      <ul id="sourceList" class="source-list"></ul>
+      <div id="sourceTotal" class="source-total hidden"></div>
       <p id="loadStatus" class="status"></p>
 
       <h2>2. Mode</h2>
@@ -76,12 +77,7 @@
           </select>
         </label>
         <label>Rounds
-          <select id="rounds">
-            <option value="10">10</option>
-            <option value="20" selected>20</option>
-            <option value="30">30</option>
-            <option value="0">Whole playlist</option>
-          </select>
+          <input id="rounds" type="number" min="1" max="999" value="20" inputmode="numeric" title="Split evenly across the playlists; change the numbers next to each playlist to adjust" />
         </label>
       </div>
 

@@ -157,22 +157,74 @@ function shuffle(arr) {
 
 function pointsForStep(step) { return state.steps.length - step; }
 
-// Each round: pick a random playlist that still has unplayed songs, then a random song from it.
-// So a 20-song playlist comes up as often as a 500-song one. A song in two playlists plays once.
-function buildQueue(rounds) {
+// Takes the chosen number of random songs from each playlist, then shuffles them together.
+// A song that's in two playlists is only played once (the next playlist takes another song instead).
+function buildQueue() {
   const byId = new Map(state.tracks.map((t) => [t.id, t]));
-  const pools = state.sources.map((s) => shuffle(s.tracks.map((t) => t.id)));
-  const used = new Set(), queue = [];
-  const limit = rounds > 0 ? rounds : state.tracks.length;
-  while (queue.length < limit) {
-    pools.forEach((p) => { while (p.length && used.has(p[p.length - 1])) p.pop(); });
-    const live = pools.filter((p) => p.length);
-    if (!live.length) break;
-    const id = live[Math.floor(Math.random() * live.length)].pop();
-    used.add(id);
-    queue.push(byId.get(id));
+  const used = new Set(), picked = [];
+  state.sources.forEach((s) => {
+    let left = s.count || 0;
+    for (const t of shuffle(s.tracks)) {
+      if (left <= 0) break;
+      if (used.has(t.id)) continue;
+      used.add(t.id);
+      picked.push(byId.get(t.id));
+      left--;
+    }
+  });
+  return shuffle(picked);
+}
+
+// Split the rounds as evenly as possible: 10 rounds over 3 playlists → 4, 3, 3.
+// A playlist never gets more than it has; what it can't take goes to the others.
+function distribute(total) {
+  state.sources.forEach((s) => (s.count = 0));
+  let left = total, room = true;
+  while (left > 0 && room) {
+    room = false;
+    for (const s of state.sources) {
+      if (left <= 0) break;
+      if (s.count < s.tracks.length) { s.count++; left--; room = true; }
+    }
   }
-  return queue;
+}
+
+const totalCount = () => state.sources.reduce((n, s) => n + (s.count || 0), 0);
+
+function roundsWanted() {
+  const n = Math.floor(Number($("rounds").value));
+  return n > 0 ? Math.min(n, 999) : 20;
+}
+
+// Rounds box changed: spread the new total evenly.
+function onRoundsChange() {
+  const n = roundsWanted();
+  $("rounds").value = n;
+  distribute(n);
+  syncRounds();
+  renderSources();
+  save();
+}
+
+// A playlist's number changed: the rounds box shows the new total.
+function setCount(i, value) {
+  const s = state.sources[i];
+  s.count = Math.max(0, Math.min(s.tracks.length, Math.floor(Number(value)) || 0));
+  syncRounds();
+  renderSources();
+  save();
+}
+
+function useAllSongs() {
+  state.sources.forEach((s) => (s.count = s.tracks.length));
+  syncRounds();
+  renderSources();
+  save();
+}
+
+function syncRounds() {
+  if (state.sources.length) $("rounds").value = totalCount();
+  updateStartButton();
 }
 
 // "From: Party hits · 2000s" when more than one playlist is in the game.
@@ -182,8 +234,7 @@ function playlistLabel(track) {
 
 function startGame() {
   state.steps = $("steps").value.split(",").map(Number);
-  const rounds = Number($("rounds").value);
-  state.queue = buildQueue(rounds);
+  state.queue = buildQueue();
   state.mode = document.querySelector('input[name="mode"]:checked').value;
   state.players = isOnline() ? net.players : state.partyPlayers;
   if (isSolo()) state.solo = { title: 0, artist: 0, streak: 0, best: 0 };
@@ -545,7 +596,7 @@ function renderPlayers() {
 function updateStartButton() {
   const mode = document.querySelector('input[name="mode"]:checked').value;
   const count = mode === "online" ? net.players.length : state.partyPlayers.length;
-  $("startBtn").disabled = !(state.tracks.length && (mode === "solo" || count));
+  $("startBtn").disabled = !(state.tracks.length && totalCount() > 0 && (mode === "solo" || count));
   $("playersSection").classList.toggle("hidden", mode !== "party");
   $("roomSection").classList.toggle("hidden", mode !== "online");
   $("startHint").textContent = mode === "online" && state.tracks.length && !count ? "Waiting for at least one player to join the room." : "";
@@ -579,8 +630,9 @@ async function addSource(input, quiet) {
     const res = await loadSource(src);
     if (!res.tracks.length) { setStatus(`"${res.title}" has no songs with previews.`, "error", status); return false; }
     if (state.sources.some((s) => s.key === key)) return false; // added twice while loading
-    state.sources.push({ key, input: input.trim(), title: res.title || `Deezer ${src.type} ${src.id}`, tracks: res.tracks });
+    state.sources.push({ key, input: input.trim(), title: res.title || `Deezer ${src.type} ${src.id}`, tracks: res.tracks, count: 0 });
     mergeTracks();
+    if (!quiet) { distribute(roundsWanted()); syncRounds(); }
     if (!quiet) setStatus(`Added "${res.title}" (${res.tracks.length} songs).`, "ok", status);
     return true;
   } catch (e) {
@@ -602,6 +654,8 @@ async function onLoad() {
 function removeSource(i) {
   state.sources.splice(i, 1);
   mergeTracks();
+  distribute(roundsWanted());
+  syncRounds();
   renderSources();
   setStatus("", "", $("loadStatus"));
   updateStartButton();
@@ -626,18 +680,61 @@ function renderSources() {
   list.innerHTML = "";
   state.sources.forEach((s, i) => {
     const li = document.createElement("li");
-    const name = document.createElement("span");
+    const name = document.createElement("div");
+    name.className = "src-name";
     name.textContent = s.title;
-    const n = document.createElement("small");
-    n.textContent = `${s.tracks.length} songs`;
+    const size = document.createElement("small");
+    size.textContent = `${s.tracks.length} songs`;
+    name.appendChild(size);
+
+    const step = document.createElement("div");
+    step.className = "stepper";
+    const minus = document.createElement("button");
+    minus.className = "btn ghost";
+    minus.textContent = "−";
+    minus.title = "One song fewer";
+    minus.disabled = s.count <= 0;
+    minus.onclick = () => setCount(i, s.count - 1);
+    const num = document.createElement("input");
+    num.type = "number";
+    num.min = 0;
+    num.max = s.tracks.length;
+    num.value = s.count;
+    num.setAttribute("aria-label", `Songs from ${s.title}`);
+    num.onchange = () => setCount(i, num.value);
+    num.onkeydown = (e) => { if (e.key === "Enter") num.blur(); };
+    const plus = document.createElement("button");
+    plus.className = "btn ghost";
+    plus.textContent = "+";
+    plus.title = "One song more";
+    plus.disabled = s.count >= s.tracks.length;
+    plus.onclick = () => setCount(i, s.count + 1);
+    step.append(minus, num, plus);
+
     const x = document.createElement("button");
+    x.className = "src-remove";
     x.textContent = "×";
     x.title = `Remove ${s.title}`;
     x.onclick = () => removeSource(i);
-    li.append(name, n, x);
+    li.append(name, step, x);
     list.appendChild(li);
   });
-  if (state.sources.length > 1) setStatus(`${state.tracks.length} songs from ${state.sources.length} playlists.`, "ok", $("loadStatus"));
+  const total = totalCount();
+  $("sourceTotal").classList.toggle("hidden", !state.sources.length);
+  $("sourceTotal").innerHTML = "";
+  if (state.sources.length) {
+    const t = document.createElement("span");
+    t.textContent = `Total: ${total} ${total === 1 ? "song" : "songs"} = ${total} ${total === 1 ? "round" : "rounds"}`;
+    const all = document.createElement("button");
+    all.className = "btn ghost";
+    all.textContent = `Use all ${state.tracks.length} songs`;
+    all.onclick = useAllSongs;
+    const even = document.createElement("button");
+    even.className = "btn ghost";
+    even.textContent = "Split evenly";
+    even.onclick = onRoundsChange;
+    $("sourceTotal").append(t, even, all);
+  }
 }
 
 // ---------------- Persistence ----------------
@@ -645,7 +742,7 @@ function renderSources() {
 function save() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      sources: state.sources.map((s) => s.input),
+      sources: state.sources.map((s) => ({ input: s.input, count: s.count })),
       players: state.partyPlayers.map((p) => p.name),
       steps: $("steps").value,
       startPos: $("startPos").value,
@@ -662,11 +759,22 @@ function restore() {
     state.partyPlayers = (s.players || []).map((name) => ({ name, score: 0 }));
     if (s.steps) $("steps").value = s.steps;
     if (s.startPos) $("startPos").value = s.startPos;
-    if (s.rounds) $("rounds").value = s.rounds;
+    if (Number(s.rounds) > 0) $("rounds").value = s.rounds;   // old saves could have 0 = whole playlist
     if (s.mode) document.querySelector(`input[name="mode"][value="${s.mode}"]`).checked = true;
     renderPlayers();
-    const inputs = s.sources || (s.source ? [s.source] : []);   // older saves had one "source"
-    (async () => { for (const input of inputs) await addSource(input, true); })();
+    // Older saves had one "source", or a list of plain links without counts.
+    const saved = (s.sources || (s.source ? [s.source] : [])).map((x) => (typeof x === "string" ? { input: x } : x));
+    (async () => {
+      for (const x of saved) await addSource(x.input, true);
+      const counts = saved.every((x) => typeof x.count === "number");
+      if (counts) state.sources.forEach((src) => {
+        const x = saved.find((y) => y.input.trim() === src.input);
+        src.count = x ? Math.min(x.count, src.tracks.length) : 0;
+      });
+      else distribute(roundsWanted());
+      syncRounds();
+      renderSources();
+    })();
   } catch {}
 }
 
@@ -902,7 +1010,8 @@ $("loadBtn").onclick = onLoad;
 $("source").addEventListener("keydown", (e) => { if (e.key === "Enter") onLoad(); });
 $("addPlayerBtn").onclick = addPlayer;
 $("playerName").addEventListener("keydown", (e) => { if (e.key === "Enter") addPlayer(); });
-["steps", "startPos", "rounds"].forEach((id) => $(id).addEventListener("change", save));
+["steps", "startPos"].forEach((id) => $(id).addEventListener("change", save));
+$("rounds").addEventListener("change", onRoundsChange);
 $("startBtn").onclick = startGame;
 $("playBtn").onclick = play;
 $("moreBtn").onclick = hearMore;
