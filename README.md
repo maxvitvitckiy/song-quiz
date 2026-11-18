@@ -113,3 +113,20 @@ You score more points the fewer seconds you needed, and the sidebar tracks point
 - Audio is never downloaded or stored. It plays straight from Deezer.
 - Songs without a preview in your country are skipped automatically.
 - Settings, players and the playlist link are remembered in your browser.
+
+## Checking the code
+
+The site needs no build step: the files in this folder are the site. To check a change before pushing:
+
+```bash
+npm install      # once
+npm test         # unit tests for answer matching, scoring and playlists (tests/)
+npm run check    # type check: catches misspelt names and fields across files
+```
+
+- `match.js` and `rules.js` hold the game's rules and touch nothing on the page, so `tests/` runs them in Node.
+  When a guess is judged wrong (or right) by mistake, add that case to `tests/rules.test.js` first.
+- Every message between the host and the phones is listed at the top of `net.js`, with a helper to build each one.
+  Change a message there, and `npm run check` points at every place on both sides that has to follow.
+- `index.html` and `play.html` load their scripts into one shared scope each, so they're checked separately
+  (`jsconfig.json` and `jsconfig.play.json`). A new script goes into the page and into its jsconfig, in the same order.

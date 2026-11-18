@@ -1,7 +1,10 @@
+// @ts-check
 // Guess the Song — plays short clips from Deezer's public 30-second previews.
 // No build step, no server code: Deezer's API is called with JSONP because it
 // doesn't send CORS headers, and preview MP3s play straight from Deezer's CDN.
 
+// Typed as `any` so .value, .disabled and so on need no casts; the checks that matter are elsewhere.
+/** @type {(id: string) => any} */
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = "guess-the-song-v1";
 
@@ -24,6 +27,8 @@ const state = {
 };
 
 const isSolo = () => state.mode === "solo";
+// The mode chosen on the setup screen (state.mode is the mode of the game being played).
+const pickedMode = () => /** @type {HTMLInputElement} */ (document.querySelector('input[name="mode"]:checked')).value;
 
 // ---------------- Deezer (JSONP) ----------------
 
@@ -43,17 +48,6 @@ function deezer(path) {
     script.onerror = () => { cleanup(); reject(new Error("Couldn't reach Deezer.")); };
     document.head.appendChild(script);
   });
-}
-
-function parseSource(text) {
-  text = text.trim();
-  if (/^\d+$/.test(text)) return { type: "playlist", id: text };
-  const m = text.match(/deezer\.com\/(?:[a-z]{2}\/)?(playlist|album)\/(\d+)/i);
-  if (m) return { type: m[1].toLowerCase(), id: m[2] };
-  if (/link\.deezer\.com|deezer\.page\.link/i.test(text)) {
-    throw new Error("That's a short share link. Open it in your browser, then copy the full address (it contains /playlist/ and a number).");
-  }
-  throw new Error("Paste a Deezer playlist or album link, e.g. https://www.deezer.com/playlist/1234567");
 }
 
 async function loadSource(src) {
@@ -78,14 +72,6 @@ async function loadSource(src) {
     path = res.next ? cleanNext(res.next) : null;
   }
   return { title: info.title, tracks };
-}
-
-// Deezer's "next page" link repeats our JSONP params; strip them so deezer() can add fresh ones.
-function cleanNext(next) {
-  const u = new URL(next);
-  u.searchParams.delete("output");
-  u.searchParams.delete("callback");
-  return u.pathname + u.search;
 }
 
 async function refreshPreview(track) {
@@ -146,48 +132,7 @@ audio.addEventListener("ended", () => setPlaying(false));
 
 // ---------------- Game ----------------
 
-function shuffle(arr) {
-  const a = arr.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
 function pointsForStep(step) { return state.steps.length - step; }
-
-// Takes the chosen number of random songs from each playlist, then shuffles them together.
-// A song that's in two playlists is only played once (the next playlist takes another song instead).
-function buildQueue() {
-  const byId = new Map(state.tracks.map((t) => [t.id, t]));
-  const used = new Set(), picked = [];
-  state.sources.forEach((s) => {
-    let left = s.count || 0;
-    for (const t of shuffle(s.tracks)) {
-      if (left <= 0) break;
-      if (used.has(t.id)) continue;
-      used.add(t.id);
-      picked.push(byId.get(t.id));
-      left--;
-    }
-  });
-  return shuffle(picked);
-}
-
-// Split the rounds as evenly as possible: 10 rounds over 3 playlists → 4, 3, 3.
-// A playlist never gets more than it has; what it can't take goes to the others.
-function distribute(total) {
-  state.sources.forEach((s) => (s.count = 0));
-  let left = total, room = true;
-  while (left > 0 && room) {
-    room = false;
-    for (const s of state.sources) {
-      if (left <= 0) break;
-      if (s.count < s.tracks.length) { s.count++; left--; room = true; }
-    }
-  }
-}
 
 const totalCount = () => state.sources.reduce((n, s) => n + (s.count || 0), 0);
 
@@ -200,7 +145,7 @@ function roundsWanted() {
 function onRoundsChange() {
   const n = roundsWanted();
   $("rounds").value = n;
-  distribute(n);
+  distribute(state.sources, n);
   syncRounds();
   renderSources();
   save();
@@ -234,8 +179,8 @@ function playlistLabel(track) {
 
 function startGame() {
   state.steps = $("steps").value.split(",").map(Number);
-  state.queue = buildQueue();
-  state.mode = document.querySelector('input[name="mode"]:checked').value;
+  state.queue = buildQueue(state.sources, state.tracks);
+  state.mode = pickedMode();
   state.players = isOnline() ? net.players : state.partyPlayers;
   if (isSolo()) state.solo = { title: 0, artist: 0, streak: 0, best: 0 };
   state.players.forEach((p) => (p.score = 0));
@@ -252,35 +197,7 @@ function startGame() {
 
 // ---------------- Answer matching ----------------
 
-// norm(), loose(), sameText() and searchOptions() live in match.js (shared with the phones).
-
-// "Song (feat. X) [Remix] - Radio Edit" → "Song"
-const baseTitle = (t) => (t || "").replace(/\s*[\(\[][^\)\]]*[\)\]]/g, "").replace(/\s+-\s+.*$/, "").trim();
-
-const FEAT_RE = /[\(\[]\s*(?:feat\.?|ft\.?|featuring|with)\s+([^\)\]]+)[\)\]]/i;
-const splitNames = (s) => (s || "").split(/\s*(?:,|&|\band\b|\bx\b|\+|\/)\s*/i).map((x) => x.trim()).filter(Boolean);
-
-// Every artist name that counts for a track: main artist (whole and split), featured artists
-// from the title, and contributors fetched from Deezer at the start of the round.
-function artistNames(track) {
-  const names = [track.artist, ...splitNames(track.artist)];
-  const f = (track.fullTitle || "").match(FEAT_RE);
-  if (f) names.push(...splitNames(f[1]));
-  names.push(...(track.contributors || []));
-  return names.filter((n) => norm(n));
-}
-
-// Matches ignore case, accents and punctuation, and also work across alphabets
-// and spellings ("Zori" = "Зорі", "Okean Elzy" = "Океан Ельзи").
-function titleMatches(guess, track) {
-  if (!norm(baseTitle(guess)) && !loose(baseTitle(guess))) return false;
-  return [track.title, track.fullTitle].some((t) => sameText(guess, t) || sameText(baseTitle(guess), baseTitle(t)));
-}
-
-function artistMatches(guess, track) {
-  const names = artistNames(track);
-  return [guess, ...splitNames(guess)].some((g) => names.some((n) => sameText(g, n)));
-}
+// The rules (titleMatches(), artistMatches(), …) live in rules.js; text matching in match.js.
 
 async function loadContributors(track) {
   if (track.contributors) return;
@@ -293,7 +210,6 @@ async function loadContributors(track) {
 
 // ---------------- Rounds ----------------
 
-const FIELDS = ["title", "artist"];
 const LABEL = { title: "Title", artist: "Artist", song: "Guess" };
 
 function nextRound() {
@@ -556,7 +472,7 @@ function scoreItem(p, adjustable) {
   if (adjustable) {
     const adj = document.createElement("div");
     adj.className = "adj";
-    [["−", -1, "Remove a point"], ["+", 1, "Add a point"]].forEach(([label, d, title]) => {
+    /** @type {[string, number, string][]} */ ([["−", -1, "Remove a point"], ["+", 1, "Add a point"]]).forEach(([label, d, title]) => {
       const b = document.createElement("button");
       b.textContent = label;
       b.title = `${title} for ${p.name}`;
@@ -601,7 +517,7 @@ function renderPlayers() {
 }
 
 function updateStartButton() {
-  const mode = document.querySelector('input[name="mode"]:checked').value;
+  const mode = pickedMode();
   const count = mode === "online" ? net.players.length : state.partyPlayers.length;
   $("startBtn").disabled = !(state.tracks.length && totalCount() > 0 && (mode === "solo" || count));
   $("playersSection").classList.toggle("hidden", mode !== "party");
@@ -638,8 +554,8 @@ async function addSource(input, quiet) {
     if (!res.tracks.length) { setStatus(`"${res.title}" has no songs with previews.`, "error", status); return false; }
     if (state.sources.some((s) => s.key === key)) return false; // added twice while loading
     state.sources.push({ key, input: input.trim(), title: res.title || `Deezer ${src.type} ${src.id}`, tracks: res.tracks, count: 0 });
-    mergeTracks();
-    if (!quiet) { distribute(roundsWanted()); syncRounds(); }
+    state.tracks = mergeTracks(state.sources);
+    if (!quiet) { distribute(state.sources, roundsWanted()); syncRounds(); }
     if (!quiet) setStatus(`Added "${res.title}" (${res.tracks.length} songs).`, "ok", status);
     return true;
   } catch (e) {
@@ -660,26 +576,13 @@ async function onLoad() {
 
 function removeSource(i) {
   state.sources.splice(i, 1);
-  mergeTracks();
-  distribute(roundsWanted());
+  state.tracks = mergeTracks(state.sources);
+  distribute(state.sources, roundsWanted());
   syncRounds();
   renderSources();
   setStatus("", "", $("loadStatus"));
   updateStartButton();
   save();
-}
-
-// One entry per song; a song that's in several playlists remembers all their names.
-function mergeTracks() {
-  const byId = new Map();
-  for (const s of state.sources) {
-    for (const t of s.tracks) {
-      const m = byId.get(t.id);
-      if (m) { if (!m.playlists.includes(s.title)) m.playlists.push(s.title); }
-      else byId.set(t.id, { ...t, playlists: [s.title] });
-    }
-  }
-  state.tracks = [...byId.values()];
 }
 
 function renderSources() {
@@ -704,9 +607,9 @@ function renderSources() {
     minus.onclick = () => setCount(i, s.count - 1);
     const num = document.createElement("input");
     num.type = "number";
-    num.min = 0;
-    num.max = s.tracks.length;
-    num.value = s.count;
+    num.min = "0";
+    num.max = String(s.tracks.length);
+    num.value = String(s.count);
     num.setAttribute("aria-label", `Songs from ${s.title}`);
     num.onchange = () => setCount(i, num.value);
     num.onkeydown = (e) => { if (e.key === "Enter") num.blur(); };
@@ -754,7 +657,7 @@ function save() {
       steps: $("steps").value,
       startPos: $("startPos").value,
       rounds: $("rounds").value,
-      mode: document.querySelector('input[name="mode"]:checked').value,
+      mode: pickedMode(),
     }));
   } catch {}
 }
@@ -767,7 +670,8 @@ function restore() {
     if (s.steps) $("steps").value = s.steps;
     if (s.startPos) $("startPos").value = s.startPos;
     if (Number(s.rounds) > 0) $("rounds").value = s.rounds;   // old saves could have 0 = whole playlist
-    if (s.mode) document.querySelector(`input[name="mode"][value="${s.mode}"]`).checked = true;
+    const radio = /** @type {HTMLInputElement | null} */ (document.querySelector(`input[name="mode"][value="${s.mode}"]`));
+    if (radio) radio.checked = true;
     renderPlayers();
     // Older saves had one "source", or a list of plain links without counts.
     const saved = (s.sources || (s.source ? [s.source] : [])).map((x) => (typeof x === "string" ? { input: x } : x));
@@ -778,7 +682,7 @@ function restore() {
         const x = saved.find((y) => y.input.trim() === src.input);
         src.count = x ? Math.min(x.count, src.tracks.length) : 0;
       });
-      else distribute(roundsWanted());
+      else distribute(state.sources, roundsWanted());
       syncRounds();
       renderSources();
     })();
@@ -841,9 +745,7 @@ function options(field) {
       if (!titles.has(tk)) titles.set(tk, prepOption({ label: t.fullTitle }, t.fullTitle));
       const sk = tk + "|" + norm(t.artist);
       if (!songs.has(sk)) songs.set(sk, prepOption({ label: t.fullTitle, sub: t.artist, img: t.coverSmall || t.cover, track: t }, t.fullTitle + " " + t.artist, t.fullTitle));
-      const names = [t.artist];
-      const f = (t.fullTitle || "").match(FEAT_RE);
-      if (f) names.push(...splitNames(f[1]));
+      const names = [t.artist, ...featuredArtists(t.fullTitle)];
       for (const n of names) {
         const ak = norm(n);
         if (ak && !artists.has(ak)) artists.set(ak, prepOption({ label: n, img: n === t.artist ? t.artistPic || "" : "", round: true }, n));
@@ -930,7 +832,7 @@ async function advanceOrLose() {
 function checkField(field, value) {
   value = (value || "").trim();
   if (!value || state.revealed || state.pending || state.solved[field]) return null;
-  const ok = field === "title" ? titleMatches(value, state.current) : artistMatches(value, state.current);
+  const ok = fieldMatches(field, value, state.current);
   $(`input-${field}`).value = "";
   if (!ok) addAttempt(field, value);
   return ok;
@@ -971,10 +873,7 @@ function submitSong(option) {
   const typed = input.value.trim();
   if (state.revealed || (!option && !typed)) return;
   input.value = "";
-  const cur = state.current;
-  const right = unsolved().filter((f) => option
-    ? (f === "title" ? titleMatches(option.track.fullTitle, cur) || titleMatches(option.track.title, cur) : artistMatches(option.track.artist, cur))
-    : (f === "title" ? titleMatches(typed, cur) : artistMatches(typed, cur)));
+  const right = soloGuessSolves(option ? option.track : typed, state.current, unsolved());
   if (right.length) return right.forEach((f) => { if (!state.revealed) solveField(f); });
   addAttempt("song", option ? `${option.label} — ${option.sub}` : typed);
   advanceOrLose();
@@ -1067,11 +966,11 @@ $("revealBtn").onclick = giveUp;
 $("nobodyBtn").onclick = () => award(null);
 $("endBtn").onclick = endGame;
 $("againBtn").onclick = () => { show("setup"); updateStartButton(); if (isOnline()) netOnSetup(); };
-document.querySelectorAll(".copy-link").forEach((b) => (b.onclick = copyLink));
+document.querySelectorAll(".copy-link").forEach((b) => (/** @type {HTMLElement} */ (b).onclick = copyLink));
 
 document.addEventListener("keydown", (e) => {
   if ($("game").classList.contains("hidden")) return;
-  if (e.target.tagName === "INPUT") return;
+  if (/** @type {HTMLElement} */ (e.target).tagName === "INPUT") return;
   if (e.code === "Space") {
     e.preventDefault();
     if (state.revealed) return;

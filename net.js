@@ -1,8 +1,123 @@
+// @ts-check
 // Shared connection code for the online buzzer mode (host page and player page).
 // Everyone connects to a small room server (Cloudflare Worker, see worker/) over a normal
 // secure WebSocket, the same kind of connection as loading a website, so it works on any
 // network that can open the site. The server only forwards messages; the host's browser
 // still runs the game. No keys or tokens are involved.
+
+// ---------------- Messages between the host and the phones ----------------
+// Every message is a JSON object with its type in `t`. The room server forwards them without
+// looking inside (its own wrapping is described in worker/src/index.js).
+// Build messages with `Msg` below, and read them through the types here: with `// @ts-check`
+// a field renamed on one side shows up as an error on the other (`npm run check`).
+//
+// Phone → host
+//   hello   {name, token}       join, or rejoin under the same name (the token proves it's the same phone)
+//   buzz                        "I know!"
+//   guess   {title?, artist?}   the buzzing player's answer, only the parts that are still open
+//   vote    {kind, on}          kind "more" (Hear more) or "giveup"; on: false takes the vote back
+//   pong                        answer to a ping
+//
+// Host → phone
+//   welcome {name, code}        the name was accepted
+//   error   {msg}               for example the name is taken; the phone shows it
+//   kicked                      the host removed this player
+//   ping                        every few seconds; a phone that stops answering counts as offline
+//   options {title, artist}     suggestion lists for the guess boxes, sent when a game starts
+//   state   {…}                 everything the phones show, sent after every change (StateMsg)
+
+/** @typedef {"title" | "artist"} Field */
+/** @type {Field[]} */
+const FIELDS = ["title", "artist"];
+
+// The buzzing player has this long to answer.
+const ANSWER_SECONDS = 20;
+
+/** @typedef {"lobby" | "waiting" | "open" | "reveal" | "end"} Phase  waiting = round started, clip not played yet */
+/** @typedef {"more" | "giveup"} VoteKind */
+
+/**
+ * @typedef {{ t: "hello", name: string, token: string }
+ *   | { t: "buzz" }
+ *   | { t: "guess", title?: string, artist?: string }
+ *   | { t: "vote", kind: VoteKind, on: boolean }
+ *   | { t: "pong" }} PlayerMsg
+ */
+
+/**
+ * @typedef {{ t: "welcome", name: string, code: string }
+ *   | { t: "error", msg: string }
+ *   | { t: "kicked" }
+ *   | { t: "ping" }
+ *   | OptionsMsg
+ *   | StateMsg} HostMsg
+ */
+
+/**
+ * One suggestion in a guess box.
+ * @typedef {object} WireOption
+ * @property {string} label
+ * @property {string} img     picture URL, or ""
+ * @property {boolean} round  show it round, with the first letter when there's no picture (artists)
+ */
+
+/** @typedef {{ t: "options", title: WireOption[], artist: WireOption[] }} OptionsMsg */
+
+/**
+ * The latest guess, shown on every phone.
+ * @typedef {object} GuessResult
+ * @property {string} name
+ * @property {number} pts
+ * @property {{ field: Field, text: string, ok: boolean }[]} parts
+ * @property {boolean} timedOut
+ * @property {boolean} frozen   the player can't buzz again until "Hear more"
+ */
+
+/**
+ * @typedef {object} Votes
+ * @property {number} players     players online
+ * @property {string[]} more      names voting "Hear more"
+ * @property {string[]} giveup    names voting "Give up"
+ * @property {number} moreNeed    votes that play the longer clip
+ * @property {number} giveupNeed  votes that reveal the song
+ */
+
+/**
+ * @typedef {object} StateMsg
+ * @property {"state"} t
+ * @property {string} code
+ * @property {Phase} phase
+ * @property {number} round        1-based
+ * @property {number} total        rounds in the game
+ * @property {number} pts          what a correct part is worth now
+ * @property {number} seconds      length of the current clip
+ * @property {number} nextSeconds  length of the next clip, 0 if this is the longest
+ * @property {string | null} buzzer     name of the player answering
+ * @property {number} remaining    ms they have left
+ * @property {string[]} frozen
+ * @property {Votes} votes
+ * @property {Record<Field, { by: string, pts: number, text: string } | null>} solved
+ * @property {GuessResult | null} last
+ * @property {{ name: string, score: number, online: boolean }[]} players
+ * @property {{ title: string, artist: string, cover: string, from: string } | null} answer  set on reveal and at the end
+ */
+
+const Msg = {
+  // Phone → host
+  /** @returns {PlayerMsg} */ hello: (/** @type {string} */ name, /** @type {string} */ token) => ({ t: "hello", name, token }),
+  /** @returns {PlayerMsg} */ buzz: () => ({ t: "buzz" }),
+  /** @returns {PlayerMsg} */ guess: (/** @type {{ title?: string, artist?: string }} */ parts) => ({ t: "guess", ...parts }),
+  /** @returns {PlayerMsg} */ vote: (/** @type {VoteKind} */ kind, /** @type {boolean} */ on) => ({ t: "vote", kind, on }),
+  /** @returns {PlayerMsg} */ pong: () => ({ t: "pong" }),
+  // Host → phone (the state message is built by stateMessage() in online.js)
+  /** @returns {HostMsg} */ welcome: (/** @type {string} */ name, /** @type {string} */ code) => ({ t: "welcome", name, code }),
+  /** @returns {HostMsg} */ error: (/** @type {string} */ msg) => ({ t: "error", msg }),
+  /** @returns {HostMsg} */ kicked: () => ({ t: "kicked" }),
+  /** @returns {HostMsg} */ ping: () => ({ t: "ping" }),
+  /** @returns {HostMsg} */ options: (/** @type {WireOption[]} */ title, /** @type {WireOption[]} */ artist) => ({ t: "options", title, artist }),
+};
+
+// ---------------- Room server ----------------
 
 // Address of the deployed room server, e.g. "wss://song-quiz-rooms.YOUR-NAME.workers.dev".
 const ROOM_SERVER = "wss://song-quiz-rooms.max-vitvitckiy.workers.dev";

@@ -1,3 +1,4 @@
+// @ts-check
 // Text matching shared by the host page and the players' phones.
 //
 // norm()  — lowercase, no accents, punctuation turned into spaces. "Café del Mar!" → "cafe del mar"

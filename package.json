@@ -1,0 +1,12 @@
+{
+  "name": "guess-the-song",
+  "private": true,
+  "description": "No build step: the site is the plain files in this folder. These scripts are only for checking the code.",
+  "scripts": {
+    "test": "node --test",
+    "check": "tsc -p jsconfig.json && tsc -p jsconfig.play.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}

@@ -1,9 +1,12 @@
+// @ts-check
 // Player's phone: join a room, press "I know", type a guess.
-// The host's browser decides everything; this page only shows what the host sends.
+// The host's browser decides everything; this page only shows what the host sends
+// (every message is listed in net.js).
 
+// Typed as `any` so .value, .disabled and so on need no casts; the checks that matter are elsewhere.
+/** @type {(id: string) => any} */
 const $ = (id) => document.getElementById(id);
 const ME_KEY = "guess-the-song-player";
-const FIELDS = ["title", "artist"];
 
 const me = { name: "", code: "", token: "" };
 let lastHeard = 0, watchdog = null;
@@ -12,6 +15,7 @@ let joined = false;        // the host accepted our name at least once
 let leaving = false;
 let retryTimer = null, connectTimer = null;
 let options = { title: [], artist: [] };
+/** @type {StateMsg | null} */
 let view = null;           // latest state from the host
 let guessing = false;      // our guess form is open
 let deadline = 0;
@@ -21,8 +25,8 @@ let deadline = 0;
 function join() {
   const name = $("nameIn").value.replace(/\s+/g, " ").trim();
   const code = cleanCode($("codeIn").value);
-  if (!name) return status("Type your name.", "error");
-  if (code.length < 4) return status("Type the room code from the host.", "error");
+  if (!name) return showStatus("Type your name.", "error");
+  if (code.length < 4) return showStatus("Type the room code from the host.", "error");
   me.name = name;
   me.code = code;
   try { localStorage.setItem(ME_KEY, JSON.stringify({ name, token: me.token })); } catch {}
@@ -31,7 +35,7 @@ function join() {
   history.replaceState(null, "", u);
   leaving = false;
   $("joinBtn").disabled = true;
-  status("Connecting…");
+  showStatus("Connecting…");
   connect();
 }
 
@@ -44,7 +48,7 @@ function connect() {
     if (conn !== c || leaving) return;
     clearTimeout(connectTimer);
     lastHeard = Date.now();
-    c.send({ t: "hello", name: me.name, token: me.token });
+    c.send(Msg.hello(me.name, me.token));
   });
   c.on("data", (msg) => { if (conn === c) onMessage(msg); });
   c.on("close", () => { if (conn === c && !leaving && joined) scheduleRetry("Connection lost. Reconnecting…"); });
@@ -76,7 +80,7 @@ function scheduleRetry(msg) {
 
 function fail(msg) {
   clearTimeout(connectTimer);
-  status(msg, "error");
+  showStatus(msg, "error");
   $("joinBtn").disabled = false;
   showJoin();
 }
@@ -92,7 +96,7 @@ function leave() {
   view = null;
   closeGuess();
   $("joinBtn").disabled = false;
-  status("");
+  showStatus("");
   showJoin();
 }
 
@@ -107,10 +111,11 @@ function startWatchdog() {
   }, 3000);
 }
 
+/** @param {HostMsg} msg */
 function onMessage(msg) {
   if (!msg || typeof msg !== "object") return;
   lastHeard = Date.now();
-  if (msg.t === "ping") return send({ t: "pong" });
+  if (msg.t === "ping") return send(Msg.pong());
   if (msg.t === "welcome") {
     joined = true;
     me.name = msg.name;
@@ -124,7 +129,7 @@ function onMessage(msg) {
     else setMsg(msg.msg, "bad");
   } else if (msg.t === "kicked") {
     leave();
-    status("The host removed you from the room.", "error");
+    showStatus("The host removed you from the room.", "error");
   } else if (msg.t === "options") {
     const prep = (list) => (list || []).map((o) => prepOption({ label: String(o.label || ""), img: o.img || "", round: !!o.round }, String(o.label || "")));
     options = { title: prep(msg.title), artist: prep(msg.artist) };
@@ -210,7 +215,7 @@ function render() {
     const n = document.createElement("span");
     n.textContent = p.name + (s.frozen.includes(p.name) ? " ❄" : "") + (p.online ? "" : " · offline");
     const b = document.createElement("b");
-    b.textContent = p.score;
+    b.textContent = String(p.score);
     li.append(n, b);
     board.appendChild(li);
   });
@@ -218,6 +223,7 @@ function render() {
 
 // "Hear more" needs more than half the players, "Give up" needs everyone.
 // Tapping again takes the vote back.
+/** @param {StateMsg} s @param {boolean} mine  we are the one answering */
 function renderVotes(s, mine) {
   const v = s.votes || { more: [], giveup: [], players: 0, moreNeed: 1, giveupNeed: 1 };
   const show = (s.phase === "waiting" || s.phase === "open") && !mine;
@@ -243,11 +249,12 @@ function vote(kind) {
   const on = !list.includes(me.name);
   // Show the tap right away; the host's next update has the real count.
   view.votes[kind] = on ? list.concat(me.name) : list.filter((n) => n !== me.name);
-  send({ t: "vote", kind, on });
+  send(Msg.vote(kind, on));
   if (navigator.vibrate) navigator.vibrate(20);
   render();
 }
 
+/** @param {StateMsg} s @param {boolean} frozen @param {boolean} mine  we are the one answering */
 function messageFor(s, frozen, mine) {
   if (mine) return ["Your turn! Type your answer.", "ok"];
   if (s.phase === "lobby") return [`You're in, ${me.name}. Waiting for the game to start.`, ""];
@@ -283,7 +290,7 @@ function setMsg(text, kind) {
   el.className = "p-msg" + (kind ? " " + kind : "");
 }
 
-function status(msg, kind) {
+function showStatus(msg, kind) {
   const el = $("joinStatus");
   el.textContent = msg;
   el.className = "status" + (kind ? " " + kind : "");
@@ -297,10 +304,11 @@ function showGame() { $("joinView").classList.add("hidden"); $("gameView").class
 function buzz() {
   if ($("buzzBtn").disabled) return;
   $("buzzBtn").disabled = true;           // the host's answer re-enables it if someone was faster
-  send({ t: "buzz" });
+  send(Msg.buzz());
   if (navigator.vibrate) navigator.vibrate(40);
 }
 
+/** @param {StateMsg} s */
 function openGuess(s) {
   guessing = true;
   FIELDS.forEach((f) => { $(`g-${f}`).value = ""; });
@@ -321,17 +329,18 @@ function closeGuess() {
 function tick() {
   if (!guessing) return;
   const left = Math.max(0, deadline - Date.now());
-  $("timerFill").style.width = (left / 200) + "%"; // 20 s → 100%
+  $("timerFill").style.width = (left / (ANSWER_SECONDS * 10)) + "%";
   requestAnimationFrame(tick);
 }
 
 function sendGuess() {
   hideSuggestions();
-  const msg = { t: "guess" };
-  FIELDS.forEach((f) => { if (!$(`pf-${f}`).classList.contains("hidden")) msg[f] = $(`g-${f}`).value.trim(); });
-  if (!FIELDS.some((f) => msg[f])) return $(`g-${FIELDS.find((f) => !$(`pf-${f}`).classList.contains("hidden"))}`).focus();
+  /** @type {{ title?: string, artist?: string }} */
+  const parts = {};
+  FIELDS.forEach((f) => { if (!$(`pf-${f}`).classList.contains("hidden")) parts[f] = $(`g-${f}`).value.trim(); });
+  if (!FIELDS.some((f) => parts[f])) return $(`g-${FIELDS.find((f) => !$(`pf-${f}`).classList.contains("hidden"))}`).focus();
   $("sendBtn").disabled = true;
-  send(msg);
+  send(Msg.guess(parts));
 }
 
 // ---------------- Suggestions ----------------
@@ -420,12 +429,15 @@ $("buzzBtn").addEventListener("click", buzz);
 // A tap that started on a suggestion can still end up here on some phones; ignore it.
 $("sendBtn").onclick = () => { if (Date.now() - pickedAt > 400) sendGuess(); };
 document.addEventListener("pointercancel", () => (pressing = false));
-document.addEventListener("pointerup", (e) => { if (!e.target.closest || !e.target.closest(".suggestions")) pressing = false; });
+document.addEventListener("pointerup", (e) => {
+  const t = /** @type {any} */ (e.target);
+  if (!t.closest || !t.closest(".suggestions")) pressing = false;
+});
 $("leaveBtn").onclick = leave;
 $("moreVote").onclick = () => vote("more");
 $("giveupVote").onclick = () => vote("giveup");
 document.addEventListener("keydown", (e) => {
-  if (e.code === "Space" && e.target.tagName !== "INPUT" && !$("gameView").classList.contains("hidden")) { e.preventDefault(); buzz(); }
+  if (e.code === "Space" && /** @type {HTMLElement} */ (e.target).tagName !== "INPUT" && !$("gameView").classList.contains("hidden")) { e.preventDefault(); buzz(); }
 });
 
 (function init() {

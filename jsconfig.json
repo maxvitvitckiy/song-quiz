@@ -1,0 +1,14 @@
+{
+  // Type checking for the host page (index.html), in the editor and with `npm run check`.
+  // Same files, in the same order, as the <script> tags in index.html: they share one scope.
+  // The phone page (play.html) has its own scope, so it's checked by jsconfig.play.json.
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "target": "es2022",
+    "lib": ["es2022", "dom", "dom.iterable"],
+    "types": []
+  },
+  "files": ["types/globals.d.ts", "match.js", "rules.js", "net.js", "online.js", "app.js"]
+}

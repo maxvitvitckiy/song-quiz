@@ -1,32 +1,44 @@
+// @ts-check
 // Online buzzer mode, host side.
 // The host's browser is the referee: it owns the room, decides who buzzed first,
 // checks guesses, gives points, freezes wrong guessers and unfreezes everyone on
-// "Hear more". Players' phones (play.html) only send "hello", "buzz", "guess" and "vote".
+// "Hear more". Players' phones (play.html) only send "hello", "buzz", "guess" and "vote"
+// (every message is listed in net.js).
 // Votes: more than half the players asking for "Hear more" plays the longer clip,
 // everyone pressing "Give up" reveals the song. The host's own buttons skip the vote.
 // Audio plays on the host only (stream it to your friends, e.g. over Discord).
 
-const ANSWER_SECONDS = 20;
 const PING_MS = 4000, DROP_MS = 13000;   // a phone that's silent this long counts as offline
 const CODE_KEY = "guess-the-song-room";
 
+/**
+ * Someone who joined the room. In an online game this list is also state.players, so it holds the scores.
+ * @typedef {object} RoomPlayer
+ * @property {string} name
+ * @property {number} score
+ * @property {boolean} online
+ * @property {PlayerLink} conn
+ * @property {string} token   proves a reconnecting phone is the same one (see onHello)
+ * @property {number} [seen]  when we last heard from the phone
+ */
+
 const net = {
-  room: null,           // connection to the room server (net.js)
-  code: null,
+  room: /** @type {HostRoom | null} */ (null),   // connection to the room server (net.js)
+  code: /** @type {string | null} */ (null),
   opening: false,
-  players: [],          // [{ name, score, online, conn }]
-  phase: "lobby",       // lobby | waiting | open | reveal | end
-  buzzer: null,         // name of the player who is answering
+  players: /** @type {RoomPlayer[]} */ ([]),
+  phase: /** @type {Phase} */ ("lobby"),
+  buzzer: /** @type {string | null} */ (null),   // name of the player who is answering
   deadline: 0,
   timer: null,
   ticker: null,
-  frozen: new Set(),    // names that can't buzz until "Hear more"
-  last: null,           // result of the latest guess, shown to everyone
-  votes: { more: new Set(), giveup: new Set() }, // names voting for "Hear more" / "Give up"
+  frozen: /** @type {Set<string>} */ (new Set()),   // names that can't buzz until "Hear more"
+  last: /** @type {GuessResult | null} */ (null),  // result of the latest guess, shown to everyone
+  votes: { more: /** @type {Set<string>} */ (new Set()), giveup: /** @type {Set<string>} */ (new Set()) }, // names voting for "Hear more" / "Give up"
 };
 
 const isOnline = () => state.mode === "online";
-const onlinePicked = () => document.querySelector('input[name="mode"]:checked').value === "online";
+const onlinePicked = () => pickedMode() === "online";
 
 // ---------------- Room ----------------
 
@@ -105,7 +117,7 @@ function heartbeat() {
       p.online = false;
       changed = true;
       try { p.conn.close(); } catch {}
-    } else send(p.conn, { t: "ping" });
+    } else send(p.conn, Msg.ping());
   });
   if (!changed) return;
   renderRoomPlayers();
@@ -116,6 +128,8 @@ function heartbeat() {
 
 function send(conn, msg) { try { if (conn && conn.open) conn.send(msg); } catch {} }
 
+// `msg` comes from a phone, so every field is checked before it is used.
+/** @param {PlayerLink} conn @param {PlayerMsg} msg */
 function onPlayerMessage(conn, msg) {
   if (!msg || typeof msg !== "object") return;
   if (msg.t === "hello") return onHello(conn, msg);
@@ -127,15 +141,16 @@ function onPlayerMessage(conn, msg) {
   else if (msg.t === "vote") onVote(p, msg);
 }
 
+/** @param {PlayerLink} conn @param {Extract<PlayerMsg, { t: "hello" }>} msg */
 function onHello(conn, msg) {
   const name = String(msg.name || "").replace(/\s+/g, " ").trim().slice(0, 20);
-  if (!name) return send(conn, { t: "error", msg: "Type your name first." });
+  if (!name) return send(conn, Msg.error("Type your name first."));
   const token = String(msg.token || "");
   let p = net.players.find((x) => x.name.toLowerCase() === name.toLowerCase());
   // Same phone coming back (reload, network switch) takes its seat back and keeps the score.
   // A different phone can only reuse a name once the old one has dropped out.
   if (p && p.online && p.token !== token) {
-    return send(conn, { t: "error", msg: `"${name}" is already in this room. Pick another name.` });
+    return send(conn, Msg.error(`"${name}" is already in this room. Pick another name.`));
   }
   if (p) {
     if (p.conn && p.conn !== conn) try { p.conn.close(); } catch {}
@@ -145,7 +160,7 @@ function onHello(conn, msg) {
     net.players.push(p);
   }
   p.seen = Date.now();
-  send(conn, { t: "welcome", name: p.name, code: net.code });
+  send(conn, Msg.welcome(p.name, net.code));
   if (net.phase !== "lobby") send(conn, optionsMessage());
   renderRoomPlayers();
   updateStartButton();
@@ -154,7 +169,7 @@ function onHello(conn, msg) {
 }
 
 function kick(p) {
-  send(p.conn, { t: "kicked" });
+  send(p.conn, Msg.kicked());
   setTimeout(() => { try { p.conn.close(); } catch {} }, 200);
   net.players.splice(net.players.indexOf(p), 1);
   net.votes.more.delete(p.name);
@@ -168,6 +183,7 @@ function kick(p) {
 
 // ---------------- Buzzing and guessing ----------------
 
+/** @param {RoomPlayer} p */
 function onBuzz(p) {
   if (net.phase !== "open" || state.revealed || net.buzzer || net.frozen.has(p.name)) return netBroadcast();
   net.buzzer = p.name;
@@ -181,6 +197,7 @@ function onBuzz(p) {
   netBroadcast();
 }
 
+/** @param {RoomPlayer} p @param {{ title?: string, artist?: string, timeout?: boolean }} msg  a guess message, or a timeout */
 function onGuess(p, msg) {
   if (net.buzzer !== p.name) return;
   clearTimeout(net.timer);
@@ -192,7 +209,7 @@ function onGuess(p, msg) {
   FIELDS.forEach((f) => {
     const value = String((!msg.timeout && msg[f]) || "").trim().slice(0, 120);
     if (!value || state.solved[f]) return;
-    const ok = f === "title" ? titleMatches(value, state.current) : artistMatches(value, state.current);
+    const ok = fieldMatches(f, value, state.current);
     result.parts.push({ field: f, text: value, ok });
     if (ok) {
       p.score += pts;
@@ -230,6 +247,7 @@ const votingOpen = () => net.phase === "open" && !state.revealed;
 // the host's buttons and keys, and the players' vote buttons.
 const someoneAnswering = () => isOnline() && !!net.buzzer;
 
+/** @param {RoomPlayer} p @param {Extract<PlayerMsg, { t: "vote" }>} msg */
 function onVote(p, msg) {
   const kind = msg.kind === "more" ? "more" : msg.kind === "giveup" ? "giveup" : null;
   if (!kind || !votingOpen() || net.buzzer || (kind === "more" && !canHearMore())) return netBroadcast();
@@ -342,13 +360,15 @@ function netOnSetup() {
 
 function optionsMessage() {
   const strip = (list) => list.map((o) => ({ label: o.label, img: o.img || "", round: !!o.round }));
-  return { t: "options", title: strip(options("title")), artist: strip(options("artist")) };
+  return Msg.options(strip(options("title")), strip(options("artist")));
 }
 
+/** @returns {StateMsg} */
 function stateMessage() {
   const t = state.current;
   const inGame = net.phase !== "lobby";
-  const solved = {};
+  /** @type {StateMsg["solved"]} */
+  const solved = { title: null, artist: null };
   FIELDS.forEach((f) => {
     const s = inGame && state.solved ? state.solved[f] : null;
     solved[f] = s ? { by: s.by, pts: s.pts, text: f === "title" ? (t.fullTitle || t.title) : t.artist } : null;
@@ -481,7 +501,7 @@ function stopTicker() { clearInterval(net.ticker); net.ticker = null; }
 let beepCtx = null;
 function buzzSound() {
   try {
-    beepCtx = beepCtx || new (window.AudioContext || window.webkitAudioContext)();
+    beepCtx = beepCtx || new (window.AudioContext || /** @type {any} */ (window).webkitAudioContext)();
     const o = beepCtx.createOscillator(), g = beepCtx.createGain();
     o.type = "triangle";
     o.frequency.setValueAtTime(880, beepCtx.currentTime);
@@ -499,7 +519,7 @@ async function copyLink() {
   if (!link) return;
   try { await navigator.clipboard.writeText(link); }
   catch { $("roomLink").select(); document.execCommand("copy"); }
-  document.querySelectorAll(".copy-link").forEach((b) => {
+  document.querySelectorAll(".copy-link").forEach((/** @type {HTMLElement} */ b) => {
     const old = b.dataset.label || (b.dataset.label = b.textContent);
     b.textContent = "Copied ✓";
     setTimeout(() => (b.textContent = old), 1500);
