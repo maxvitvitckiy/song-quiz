@@ -7,7 +7,7 @@ const FIELDS = ["title", "artist"];
 
 const me = { name: "", code: "", token: "" };
 let lastHeard = 0, watchdog = null;
-let peer = null, conn = null;
+let conn = null;
 let joined = false;        // the host accepted our name at least once
 let leaving = false;
 let retryTimer = null, connectTimer = null;
@@ -39,41 +39,31 @@ function connect() {
   clearTimeout(retryTimer);
   clearTimeout(connectTimer);
   if (conn) { try { conn.close(); } catch {} conn = null; }
-  if (!peer || peer.destroyed) {
-    try { peer = makePeer(); }
-    catch (e) { return fail(e.message); }
-    peer.on("open", openConn);
-    peer.on("disconnected", () => { if (!peer.destroyed && !leaving) peer.reconnect(); });
-    peer.on("error", (err) => {
-      if (err.type === "peer-unavailable") {
-        if (joined) return scheduleRetry("The host's page is offline. Retrying…");
-        return fail("No room with that code. Check it with the host.");
-      }
-      if (["network", "server-error", "socket-error", "socket-closed", "disconnected"].includes(err.type)) {
-        return joined ? scheduleRetry("Connection lost. Reconnecting…") : fail("Couldn't reach the room server. Check your internet and try again.");
-      }
-      if (!joined) fail("Couldn't connect: " + (err.message || err.type));
-    });
-  } else if (peer.open) openConn();
-  else if (peer.disconnected) peer.reconnect();
+  const c = conn = joinRoom(me.code);
+  c.on("open", () => {
+    if (conn !== c || leaving) return;
+    clearTimeout(connectTimer);
+    lastHeard = Date.now();
+    c.send({ t: "hello", name: me.name, token: me.token });
+  });
+  c.on("data", (msg) => { if (conn === c) onMessage(msg); });
+  c.on("close", () => { if (conn === c && !leaving && joined) scheduleRetry("Connection lost. Reconnecting…"); });
+  c.on("error", (err) => {
+    if (conn !== c || leaving) return;
+    if (err.type === "no-host") {
+      if (joined) return scheduleRetry("The host's page is offline. Retrying…");
+      return fail("No room with that code. Check it with the host.");
+    }
+    if (err.type === "full") return joined ? scheduleRetry("The room is full. Retrying…") : fail("This room is full.");
+    if (joined) return scheduleRetry("Connection lost. Reconnecting…");
+    fail(err.message || "Couldn't reach the room server. Check your internet and try again.");
+  });
 
   connectTimer = setTimeout(() => {
     if (conn && conn.open) return;
     if (joined) scheduleRetry("Still reconnecting…");
-    else fail("Couldn't connect. Some Wi-Fi or mobile networks block this kind of connection; try switching between Wi-Fi and mobile data.");
+    else fail("Couldn't connect. Check your internet and try again.");
   }, 15000);
-}
-
-function openConn() {
-  if (leaving) return;
-  conn = peer.connect(NET_PREFIX + me.code, { reliable: true });
-  conn.on("open", () => {
-    clearTimeout(connectTimer);
-    lastHeard = Date.now();
-    conn.send({ t: "hello", name: me.name, token: me.token });
-  });
-  conn.on("data", onMessage);
-  conn.on("close", () => { if (!leaving && joined) scheduleRetry("Connection lost. Reconnecting…"); });
 }
 
 function scheduleRetry(msg) {
@@ -98,8 +88,7 @@ function leave() {
   clearTimeout(retryTimer);
   clearTimeout(connectTimer);
   try { conn && conn.close(); } catch {}
-  try { peer && peer.destroy(); } catch {}
-  peer = conn = null;
+  conn = null;
   view = null;
   closeGuess();
   $("joinBtn").disabled = false;

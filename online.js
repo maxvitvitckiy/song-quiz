@@ -11,7 +11,7 @@ const PING_MS = 4000, DROP_MS = 13000;   // a phone that's silent this long coun
 const CODE_KEY = "guess-the-song-room";
 
 const net = {
-  peer: null,
+  room: null,           // connection to the room server (net.js)
   code: null,
   opening: false,
   players: [],          // [{ name, score, online, conn }]
@@ -31,46 +31,41 @@ const onlinePicked = () => document.querySelector('input[name="mode"]:checked').
 // ---------------- Room ----------------
 
 function netOpen() {
-  if (net.peer || net.opening) return;
+  if (net.room || net.opening) return;
   net.opening = true;
+  // A reloaded page gets its room back: the saved token proves it's the same host.
   let saved = null;
-  try { saved = sessionStorage.getItem(CODE_KEY); } catch {}
-  tryOpen(saved || randomCode(), saved ? 4 : 0);
+  try { saved = JSON.parse(sessionStorage.getItem(CODE_KEY) || "null"); } catch {}
+  if (saved && saved.code && saved.token) tryOpen(saved.code, saved.token);
+  else tryOpen(randomCode(), randomToken());
 }
 
-// After a page reload the old room id can stay taken for a few seconds,
-// so a saved code is retried a few times before picking a new one.
-function tryOpen(code, retries) {
+function tryOpen(code, token) {
   setStatus("Opening a room…", "", $("roomStatus"));
-  let peer;
-  try { peer = makePeer(NET_PREFIX + code); }
-  catch (e) { net.opening = false; return setStatus(e.message, "error", $("roomStatus")); }
-
-  peer.on("open", () => {
-    net.peer = peer;
+  const room = openRoom(code, token);
+  room.on("open", () => {
+    net.room = room;
     net.code = code;
     net.opening = false;
-    try { sessionStorage.setItem(CODE_KEY, code); } catch {}
+    try { sessionStorage.setItem(CODE_KEY, JSON.stringify({ code, token })); } catch {}
     setStatus("Room is open. Send the link to your friends.", "ok", $("roomStatus"));
     renderRoom();
     setInterval(heartbeat, PING_MS);
   });
-  peer.on("connection", acceptConnection);
-  peer.on("disconnected", () => { if (!peer.destroyed) peer.reconnect(); });
-  peer.on("error", (err) => {
-    if (err.type === "unavailable-id" && !net.peer) {
-      peer.destroy();
-      if (retries > 0) return setTimeout(() => tryOpen(code, retries - 1), 2500);
-      return tryOpen(randomCode(), 0);
-    }
-    if (err.type === "peer-unavailable") return; // a player left; nothing to do
-    if (!net.peer) {
+  room.on("connection", acceptConnection);
+  room.on("reconnected", () => setStatus("Room is open again. Players rejoin by themselves.", "ok", $("roomStatus")));
+  room.on("error", (err) => {
+    if (!net.room) {
+      room.destroy();
+      if (err.type === "unavailable-id") return tryOpen(randomCode(), randomToken());
       net.opening = false;
-      peer.destroy();
-      setStatus("Couldn't open a room: " + (err.message || err.type) + ". Reload to try again.", "error", $("roomStatus"));
-    } else if (["network", "server-error", "socket-error", "socket-closed"].includes(err.type)) {
-      setStatus("Connection to the room server dropped. Players already in stay connected; reload if new players can't join.", "error", $("roomStatus"));
+      return setStatus("Couldn't open a room: " + (err.message || err.type) + ". Reload to try again.", "error", $("roomStatus"));
     }
+    if (err.type === "unavailable-id") {
+      room.destroy();
+      return setStatus("This room was opened in another tab. Reload to open a new one.", "error", $("roomStatus"));
+    }
+    setStatus("Lost the connection to the room server. Reconnecting…", "error", $("roomStatus"));
   });
 }
 
@@ -80,8 +75,8 @@ function joinLink() {
   u.search = "";
   u.hash = "";
   u.searchParams.set("room", net.code);
-  const peer = new URLSearchParams(location.search).get("peer");
-  if (peer) u.searchParams.set("peer", peer);
+  const server = new URLSearchParams(location.search).get("server");
+  if (server) u.searchParams.set("server", server);
   return u.toString();
 }
 
@@ -100,7 +95,7 @@ function acceptConnection(conn) {
 
 const playerOf = (conn) => net.players.find((p) => p.conn === conn && p.online);
 
-// Closed phone tabs don't always close the WebRTC link, so ping everyone and drop the silent ones.
+// A phone that loses signal doesn't always close its link right away, so ping everyone and drop the silent ones.
 function heartbeat() {
   const now = Date.now();
   let changed = false;
@@ -383,7 +378,7 @@ function netBroadcastAll(msg) { net.players.forEach((p) => p.online && send(p.co
 
 let broadcastQueued = false;
 function netBroadcast() {
-  if (!net.peer || broadcastQueued) return;
+  if (!net.room || broadcastQueued) return;
   broadcastQueued = true;
   queueMicrotask(() => { broadcastQueued = false; netBroadcastAll(stateMessage()); });
 }

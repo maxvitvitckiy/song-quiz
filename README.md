@@ -69,10 +69,30 @@ with the group (for example, screen share with audio in a Discord call).
 5. A phone that reloads or loses signal rejoins under the same name and keeps its score.
    The host can remove players from the room list and fix scores with − / +.
 
-How it works: the host's browser is the referee. Phones connect to it directly over WebRTC
-using [PeerJS](https://peerjs.com) and its free public server to find each other, so there is no
-server to run and the site still works on GitHub Pages. Some strict networks (certain mobile
-carriers, office Wi-Fi) block these connections; switching between Wi-Fi and mobile data usually fixes it.
+How it works: the host's browser is the referee. The host and every phone connect to a small
+room server (a free Cloudflare Worker in `worker/`) over an ordinary secure WebSocket, so any network
+that can open the website can join. The server only forwards messages between the phones and the host,
+one room per code, and only accepts pages from the game's own site. No keys or tokens are in the website.
+
+### Room server
+
+One-time setup:
+
+1. Create a free [Cloudflare](https://dash.cloudflare.com/sign-up) account.
+2. Deploy the Worker once from your computer (it opens a browser window to log in):
+   ```bash
+   cd worker
+   npm install
+   npx wrangler deploy
+   ```
+   It prints the Worker's address, like `https://song-quiz-rooms.YOUR-NAME.workers.dev`.
+3. Put that address into `ROOM_SERVER` at the top of `net.js`, with `wss://` instead of `https://`.
+4. If the site isn't on `https://maxvitvitckiy.github.io`, change `ALLOWED_ORIGINS` in `worker/wrangler.toml`.
+
+After changing anything in `worker/`, run `npx wrangler deploy` there again.
+
+Local testing: run `npm run dev` in `worker/` and serve the site on `localhost`; pages on localhost
+use the local room server automatically.
 
 ## Solo mode
 

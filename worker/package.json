@@ -1,0 +1,11 @@
+{
+  "name": "song-quiz-rooms",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev --var ALLOW_LOCALHOST:true",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
