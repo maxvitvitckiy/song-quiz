@@ -1,5 +1,5 @@
 {
   // Type checking for the phone page (play.html). See jsconfig.json.
   "extends": "./jsconfig.json",
-  "files": ["match.js", "net.js", "player.js"]
+  "files": ["match.js", "net.js", "ui.js", "player.js"]
 }

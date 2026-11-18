@@ -33,7 +33,7 @@ const FIELDS = ["title", "artist"];
 // The buzzing player has this long to answer.
 const ANSWER_SECONDS = 20;
 
-/** @typedef {"lobby" | "waiting" | "open" | "reveal" | "end"} Phase  waiting = round started, clip not played yet */
+/** @typedef {"lobby" | "waiting" | "open" | "reveal" | "end"} Phase  the game's phases; state.js explains them */
 /** @typedef {"more" | "giveup"} VoteKind */
 
 /**

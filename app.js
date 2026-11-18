@@ -3,32 +3,12 @@
 // No build step, no server code: Deezer's API is called with JSONP because it
 // doesn't send CORS headers, and preview MP3s play straight from Deezer's CDN.
 
-// Typed as `any` so .value, .disabled and so on need no casts; the checks that matter are elsewhere.
-/** @type {(id: string) => any} */
-const $ = (id) => document.getElementById(id);
 const STORE_KEY = "guess-the-song-v1";
 
-const state = {
-  sources: [],     // [{ key, input, title, tracks }] one per added playlist or album
-  tracks: [],      // all playable tracks from every source, merged by id (track.playlists = source titles)
-  queue: [],       // shuffled tracks for this game
-  players: [],     // players in the current game: party roster or online room
-  partyPlayers: [], // [{ name, score }] typed in on the setup screen (party mode)
-  round: 0,
-  current: null,
-  step: 0,         // index into steps (how much has been heard)
-  steps: [2, 5, 10, 20],
-  offset: 0,       // where in the 30s preview the clip starts
-  revealed: false,
-  history: [],     // [{ track, title: {by, pts}|null, artist: {by, pts}|null }]
-  mode: "party",   // "party" | "solo"
-  played: false,
-  solo: { title: 0, artist: 0, streak: 0, best: 0 },
-};
+// The game's state and phases live in state.js; $() and the suggestion lists in ui.js.
 
-const isSolo = () => state.mode === "solo";
 // The mode chosen on the setup screen (state.mode is the mode of the game being played).
-const pickedMode = () => /** @type {HTMLInputElement} */ (document.querySelector('input[name="mode"]:checked')).value;
+const pickedMode = () => /** @type {Mode} */ (/** @type {HTMLInputElement} */ (document.querySelector('input[name="mode"]:checked')).value);
 
 // ---------------- Deezer (JSONP) ----------------
 
@@ -132,8 +112,6 @@ audio.addEventListener("ended", () => setPlaying(false));
 
 // ---------------- Game ----------------
 
-function pointsForStep(step) { return state.steps.length - step; }
-
 const totalCount = () => state.sources.reduce((n, s) => n + (s.count || 0), 0);
 
 function roundsWanted() {
@@ -189,9 +167,8 @@ function startGame() {
   state.round = 0;
   state.history = [];
   save();
-  show("game");
   renderScores();
-  if (isOnline()) netOnStart();
+  game.emit("start");
   nextRound();
 }
 
@@ -218,11 +195,9 @@ function nextRound() {
   state.current = state.queue[state.round];
   state.round++;
   state.step = 0;
-  state.revealed = false;
-  state.played = false;
-  state.solved = { title: null, artist: null }; // { by: name|null, pts }
-  state.pending = null;                          // field waiting for "who got it?"
-  state.queuedAward = null;                      // second box guessed right at the same time
+  state.solved = { title: null, artist: null };
+  state.pending = null;
+  state.queuedAward = null;
   retried = false;
   const maxClip = state.steps[state.steps.length - 1];
   const room = Math.max(0, 29 - maxClip);
@@ -252,7 +227,7 @@ function nextRound() {
 
   loadAudio(state.current.preview).catch(() => {});
   loadContributors(state.current);
-  if (isOnline()) netOnRound();
+  setPhase("waiting");
 }
 
 function updateStepUI(played) {
@@ -269,22 +244,21 @@ function updateStepUI(played) {
 }
 
 async function play() {
-  if (state.revealed) return;
+  if (roundOver()) return;
   try {
     setStatus("");
     await playClip(state.offset, state.steps[state.step]);
-    state.played = true;
+    if (state.phase === "waiting") setPhase("open");
     updateStepUI(true);
-    if (isOnline()) netOnPlayed();
   } catch (e) {
     setStatus(e.message || "Couldn't play this song.", "error");
   }
 }
 
 async function hearMore() {
-  if (state.revealed || state.step >= state.steps.length - 1 || someoneAnswering()) return;
+  if (roundOver() || !canHearMore() || someoneAnswering()) return;
   state.step++;
-  if (isOnline()) netOnHearMore();
+  game.emit("hearMore");
   await play();
 }
 
@@ -311,8 +285,6 @@ function showSolved(field, missed) {
   $(`pts-${field}`).textContent = "";
   updateSongPts();
 }
-
-const unsolved = () => FIELDS.filter((f) => !state.solved[f]);
 
 // A field was guessed correctly.
 function solveField(field) {
@@ -374,16 +346,17 @@ function focusNextField() {
 
 // End of a round: everything solved, gave up, or (solo) out of clips.
 function finishRound() {
-  if (state.revealed) return;
-  state.revealed = true;
+  if (roundOver()) return;
+  setPhase("reveal");
   state.pending = null;
   setStatus("");
   hideSuggestions();
   const t = state.current, s = state.solved;
   FIELDS.forEach((f) => { if (!s[f]) showSolved(f, true); });
 
-  const rec = { track: t };
-  FIELDS.forEach((f) => { rec[f] = s[f] && (s[f].by || isSolo()) ? s[f] : null; });
+  // A part counts as got when someone scored it (in party, "No points" doesn't count).
+  const got1 = (/** @type {Field} */ f) => (s[f] && (s[f].by || isSolo()) ? s[f] : null);
+  const rec = { track: t, title: got1("title"), artist: got1("artist") };
   state.history.push(rec);
 
   const got = FIELDS.filter((f) => rec[f]);
@@ -412,19 +385,17 @@ function finishRound() {
   $("soloResult").classList.remove("hidden");
   $("soloNextBtn").focus();
   playClip(0, 0).catch(() => {});
-  if (isOnline()) netOnReveal();
 }
 
 function giveUp() {
-  if (state.revealed || someoneAnswering()) return;
+  if (roundOver() || someoneAnswering()) return;
   if (state.pending) award(null);
   finishRound();
 }
 
 function endGame() {
   stopAudio();
-  show("end");
-  if (isOnline()) netOnEnd();
+  setPhase("end");
   const board = $("finalBoard");
   board.innerHTML = "";
   const n = state.history.length;
@@ -451,9 +422,10 @@ function endGame() {
 
 // ---------------- UI helpers ----------------
 
-function show(screen) {
-  ["setup", "game", "end"].forEach((s) => $(s).classList.toggle("hidden", s !== screen));
-}
+// Each phase has its screen.
+/** @type {Record<Phase, string>} */
+const SCREEN = { lobby: "setup", waiting: "game", open: "game", reveal: "game", end: "end" };
+game.on("phase", (phase) => ["setup", "game", "end"].forEach((s) => $(s).classList.toggle("hidden", s !== SCREEN[phase])));
 
 function setStatus(msg, kind, el = $("gameStatus")) {
   el.textContent = msg;
@@ -497,7 +469,7 @@ function renderScores() {
     return;
   }
   sortedPlayers().forEach((p) => board.appendChild(scoreItem(p, true)));
-  if (isOnline()) netBroadcast();
+  game.emit("scores");
 }
 
 function renderPlayers() {
@@ -711,27 +683,6 @@ function applyModeUI() {
 
 // ---------------- Autocomplete ----------------
 
-const escapeHtml = (str) => String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const foldChars = (str) => str.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
-
-function highlight(text, words) {
-  // Highlight typed words inside a suggestion, ignoring case and accents.
-  const n = foldChars(text);
-  if (n.length !== text.length || !words.length) return escapeHtml(text);
-  const marks = new Array(text.length).fill(false);
-  for (const w of words) {
-    let i = n.indexOf(w);
-    while (i !== -1) { for (let k = i; k < i + w.length; k++) marks[k] = true; i = n.indexOf(w, i + 1); }
-  }
-  let html = "", open = false;
-  for (let i = 0; i < text.length; i++) {
-    if (marks[i] && !open) { html += "<mark>"; open = true; }
-    if (!marks[i] && open) { html += "</mark>"; open = false; }
-    html += escapeHtml(text[i]);
-  }
-  return html + (open ? "</mark>" : "");
-}
-
 // Options for each box, built once per playlist.
 //  title  — song titles, text only (an album cover would give the answer away)
 //  artist — artist names, with the artist's photo when Deezer has one
@@ -756,58 +707,6 @@ function options(field) {
   return optionCache[field];
 }
 
-const sugg = { field: null, items: [], active: -1 };
-const SUGG_FIELDS = ["title", "artist", "song"];
-const EMPTY = { title: "No songs in this playlist match", artist: "No artists in this playlist match", song: "No songs or artists in this playlist match" };
-
-function optionIcon(o) {
-  if (o.img) return `<img src="${escapeHtml(o.img)}" alt="" loading="lazy" />`;
-  if (o.round) return `<span class="initial">${escapeHtml((o.label.trim()[0] || "?").toUpperCase())}</span>`;
-  return "";
-}
-
-function updateSuggestions(field) {
-  const typed = $(`input-${field}`).value;
-  hideSuggestions();
-  if (!enoughTyped(typed)) return;
-  const items = searchOptions(options(field), typed);
-  Object.assign(sugg, { field, items, active: items.length ? 0 : -1 });
-  const box = $(`sugg-${field}`);
-  box.innerHTML = "";
-  if (!items.length) box.innerHTML = `<li class="empty">${EMPTY[field]}</li>`;
-  const hl = foldChars(typed.trim()).split(/\s+/).filter(Boolean);
-  items.forEach((o) => {
-    const li = document.createElement("li");
-    li.setAttribute("role", "option");
-    if (o.round) li.classList.add("round");
-    li.innerHTML = optionIcon(o) +
-      `<div><div class="s-title">${highlight(o.label, hl)}</div>` +
-      (o.sub ? `<div class="s-artist">${highlight(o.sub, hl)}</div>` : "") + `</div>`;
-    li.onmousedown = (e) => { e.preventDefault(); pickOption(field, o); };
-    box.appendChild(li);
-  });
-  paintActive();
-  box.classList.remove("hidden");
-}
-
-function pickOption(field, o) {
-  if (field === "song") submitSong(o);
-  else submitField(field, o.label);
-}
-
-function paintActive() {
-  if (!sugg.field) return;
-  const box = $(`sugg-${sugg.field}`);
-  [...box.children].forEach((li, i) => li.classList.toggle("active", i === sugg.active));
-  const el = box.children[sugg.active];
-  if (el) el.scrollIntoView({ block: "nearest" });
-}
-
-function hideSuggestions() {
-  SUGG_FIELDS.forEach((f) => $(`sugg-${f}`).classList.add("hidden"));
-  Object.assign(sugg, { field: null, items: [], active: -1 });
-}
-
 // ---------------- Guessing ----------------
 
 function addAttempt(field, text) {
@@ -819,19 +718,16 @@ function addAttempt(field, text) {
   $("attempts").prepend(li);
 }
 
+// Solo: a wrong guess or Skip unlocks a longer clip; after the longest one, the round is lost.
 async function advanceOrLose() {
-  if (state.step < state.steps.length - 1) {
-    state.step++;
-    await play();
-  } else {
-    finishRound();
-  }
+  if (canHearMore()) await hearMore();
+  else finishRound();
 }
 
 // Check one box. Returns true if it was correct.
 function checkField(field, value) {
-  value = (value || "").trim();
-  if (!value || state.revealed || state.pending || state.solved[field]) return null;
+  value = (value || "").trim();   // value: what was typed or picked
+  if (!value || roundOver() || state.pending || state.solved[field]) return null;
   const ok = fieldMatches(field, value, state.current);
   $(`input-${field}`).value = "";
   if (!ok) addAttempt(field, value);
@@ -850,13 +746,13 @@ function submitField(field, value) {
 // "Guess" button: check every filled box at once.
 function submitAll() {
   hideSuggestions();
-  const results = FIELDS.map((f) => [f, checkField(f, $(`input-${f}`).value)]).filter(([, r]) => r !== null);
+  const results = FIELDS.map((f) => ({ f, ok: checkField(f, $(`input-${f}`).value) })).filter((r) => r.ok !== null);
   if (!results.length) return;
-  const wrong = results.some(([, r]) => !r);
-  const right = results.filter(([, r]) => r).map(([f]) => f);
+  const wrong = results.some((r) => !r.ok);
+  const right = results.filter((r) => r.ok).map((r) => r.f);
   if (isSolo()) {
     right.forEach((f) => solveField(f));
-    if (wrong && !state.revealed) advanceOrLose();
+    if (wrong && !roundOver()) advanceOrLose();
   } else if (right.length) {
     // Party: award one box at a time; the other is re-checked after.
     if (right[1]) state.queuedAward = right[1];
@@ -871,50 +767,37 @@ function submitSong(option) {
   hideSuggestions();
   const input = $("input-song");
   const typed = input.value.trim();
-  if (state.revealed || (!option && !typed)) return;
+  if (roundOver() || (!option && !typed)) return;
   input.value = "";
   const right = soloGuessSolves(option ? option.track : typed, state.current, unsolved());
-  if (right.length) return right.forEach((f) => { if (!state.revealed) solveField(f); });
+  if (right.length) return right.forEach((f) => { if (!roundOver()) solveField(f); });
   addAttempt("song", option ? `${option.label} — ${option.sub}` : typed);
   advanceOrLose();
 }
 
 function skip() {
-  if (state.revealed) return;
+  if (roundOver()) return;
   advanceOrLose();
 }
 
-FIELDS.forEach((f) => {
-  const input = $(`input-${f}`);
-  input.addEventListener("input", () => updateSuggestions(f));
-  input.addEventListener("focus", () => updateSuggestions(f));
-  input.addEventListener("blur", () => setTimeout(() => { if (sugg.field === f) hideSuggestions(); }, 120));
-  input.addEventListener("keydown", (e) => {
-    const n = sugg.field === f ? sugg.items.length : 0;
-    if (e.key === "ArrowDown" && n) { e.preventDefault(); sugg.active = (sugg.active + 1) % n; paintActive(); }
-    else if (e.key === "ArrowUp" && n) { e.preventDefault(); sugg.active = (sugg.active - 1 + n) % n; paintActive(); }
-    else if (e.key === "Enter") {
-      e.preventDefault();
-      submitField(f, n && sugg.active >= 0 ? sugg.items[sugg.active].label : input.value);
-    } else if (e.key === "Escape") hideSuggestions();
-  });
-});
-const songInput = $("input-song");
-songInput.addEventListener("input", () => updateSuggestions("song"));
-songInput.addEventListener("focus", () => updateSuggestions("song"));
-songInput.addEventListener("blur", () => setTimeout(() => { if (sugg.field === "song") hideSuggestions(); }, 120));
-songInput.addEventListener("keydown", (e) => {
-  const n = sugg.field === "song" ? sugg.items.length : 0;
-  if (e.key === "ArrowDown" && n) { e.preventDefault(); sugg.active = (sugg.active + 1) % n; paintActive(); }
-  else if (e.key === "ArrowUp" && n) { e.preventDefault(); sugg.active = (sugg.active - 1 + n) % n; paintActive(); }
-  else if (e.key === "Enter") { e.preventDefault(); submitSong(n && sugg.active >= 0 ? sugg.items[sugg.active] : null); }
-  else if (e.key === "Escape") hideSuggestions();
-});
-$("guessBtn").onclick = () => {
-  if (!isSolo()) return submitAll();
-  const n = sugg.field === "song" ? sugg.items.length : 0;
-  submitSong(n && sugg.active >= 0 ? sugg.items[sugg.active] : null);
+// One suggestion list per box: title and artist (party), and solo's single box.
+const boxes = {
+  title: suggestBox({
+    input: $("input-title"), list: $("sugg-title"), options: () => options("title"), empty: "No songs in this playlist match",
+    onPick: (o) => submitField("title", o.label), onEnter: () => submitField("title"),
+  }),
+  artist: suggestBox({
+    input: $("input-artist"), list: $("sugg-artist"), options: () => options("artist"), empty: "No artists in this playlist match",
+    onPick: (o) => submitField("artist", o.label), onEnter: () => submitField("artist"),
+  }),
+  song: suggestBox({
+    input: $("input-song"), list: $("sugg-song"), options: () => options("song"), empty: "No songs or artists in this playlist match",
+    onPick: (o) => submitSong(o), onEnter: () => submitSong(null),
+  }),
 };
+function hideSuggestions() { Object.values(boxes).forEach((b) => b.hide()); }
+
+$("guessBtn").onclick = () => (isSolo() ? submitSong(boxes.song.active()) : submitAll());
 $("skipBtn").onclick = skip;
 $("soloNextBtn").onclick = nextRound;
 $("soloReplayBtn").onclick = () => playClip(0, 0).catch(() => {});
@@ -965,23 +848,23 @@ $("moreBtn").onclick = hearMore;
 $("revealBtn").onclick = giveUp;
 $("nobodyBtn").onclick = () => award(null);
 $("endBtn").onclick = endGame;
-$("againBtn").onclick = () => { show("setup"); updateStartButton(); if (isOnline()) netOnSetup(); };
+$("againBtn").onclick = () => { setPhase("lobby"); updateStartButton(); };
 document.querySelectorAll(".copy-link").forEach((b) => (/** @type {HTMLElement} */ (b).onclick = copyLink));
 
 document.addEventListener("keydown", (e) => {
-  if ($("game").classList.contains("hidden")) return;
+  if (!onGameScreen()) return;
   if (/** @type {HTMLElement} */ (e.target).tagName === "INPUT") return;
   if (e.code === "Space") {
     e.preventDefault();
-    if (state.revealed) return;
-    if (!state.played) play();
-    else if (state.step < state.steps.length - 1) hearMore();
+    if (roundOver()) return;
+    if (state.phase === "waiting") play();
+    else if (canHearMore()) hearMore();
     else play();
   } else if (e.key === "r" || e.key === "R") {
     giveUp();
   } else if (e.key === "n" || e.key === "N") {
     if (state.pending) award(null);
-    else if (!state.revealed) giveUp();
+    else if (!roundOver()) giveUp();
     else nextRound();
   }
 });

@@ -10,5 +10,5 @@
     "lib": ["es2022", "dom", "dom.iterable"],
     "types": []
   },
-  "files": ["types/globals.d.ts", "match.js", "rules.js", "net.js", "online.js", "app.js"]
+  "files": ["types/globals.d.ts", "match.js", "rules.js", "net.js", "state.js", "ui.js", "online.js", "app.js"]
 }

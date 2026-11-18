@@ -3,9 +3,7 @@
 // The host's browser decides everything; this page only shows what the host sends
 // (every message is listed in net.js).
 
-// Typed as `any` so .value, .disabled and so on need no casts; the checks that matter are elsewhere.
-/** @type {(id: string) => any} */
-const $ = (id) => document.getElementById(id);
+// $() and the suggestion lists come from ui.js.
 const ME_KEY = "guess-the-song-player";
 
 const me = { name: "", code: "", token: "" };
@@ -345,43 +343,12 @@ function sendGuess() {
 
 // ---------------- Suggestions ----------------
 
-// norm(), loose() and searchOptions() come from match.js: "Zori" finds "Зорі" and the other way round.
-const escapeHtml = (str) => String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const sugg = { field: null, items: [], active: -1 };
-let pressing = false;      // a finger is down on a suggestion
-let pickedAt = 0;          // when a suggestion was last picked
-
-function suggest(field) {
-  hideSuggestions();
-  const items = searchOptions(options[field] || [], $(`g-${field}`).value);
-  if (!items.length) return;
-  Object.assign(sugg, { field, items, active: 0 });
-  const box = $(`s-${field}`);
-  box.innerHTML = "";
-  items.forEach((o, i) => {
-    const li = document.createElement("li");
-    if (o.round) li.classList.add("round");
-    li.innerHTML = (o.img ? `<img src="${escapeHtml(o.img)}" alt="" loading="lazy" />` : o.round ? `<span class="initial">${escapeHtml((o.label.trim()[0] || "?").toUpperCase())}</span>` : "") +
-      `<div class="s-title">${escapeHtml(o.label)}</div>`;
-    // Pick on click, not on touch-down: the list would close under the finger and the
-    // rest of the tap would land on whatever is underneath (often the Send button).
-    li.addEventListener("pointerdown", (e) => { e.preventDefault(); pressing = true; });
-    li.addEventListener("click", (e) => { e.preventDefault(); pressing = false; pick(field, i); });
-    box.appendChild(li);
-  });
-  paint();
-  box.classList.remove("hidden");
-}
-
-function paint() {
-  if (!sugg.field) return;
-  [...$(`s-${sugg.field}`).children].forEach((li, i) => li.classList.toggle("active", i === sugg.active));
-}
-
 // Picking a suggestion only fills the box. Sending is always its own tap on Send.
-function pick(field, i) {
-  $(`g-${field}`).value = sugg.items[i].label;
-  hideSuggestions();
+let pickedAt = 0;   // when a suggestion was last picked
+
+/** @param {Field} field @param {Option} o */
+function pick(field, o) {
+  $(`g-${field}`).value = o.label;
   pickedAt = Date.now();
   // Jump to the other open box if it's empty; otherwise close the keyboard so Send is in view.
   const other = FIELDS.find((f) => f !== field && !$(`pf-${f}`).classList.contains("hidden") && !$(`g-${f}`).value);
@@ -389,26 +356,11 @@ function pick(field, i) {
   else $(`g-${field}`).blur();
 }
 
-function hideSuggestions() {
-  FIELDS.forEach((f) => $(`s-${f}`).classList.add("hidden"));
-  Object.assign(sugg, { field: null, items: [], active: -1 });
-}
-
-FIELDS.forEach((f) => {
-  const input = $(`g-${f}`);
-  input.addEventListener("input", () => suggest(f));
-  input.addEventListener("blur", () => setTimeout(() => { if (sugg.field === f && !pressing) hideSuggestions(); }, 150));
-  input.addEventListener("keydown", (e) => {
-    const n = sugg.field === f ? sugg.items.length : 0;
-    if (e.key === "ArrowDown" && n) { e.preventDefault(); sugg.active = (sugg.active + 1) % n; paint(); }
-    else if (e.key === "ArrowUp" && n) { e.preventDefault(); sugg.active = (sugg.active - 1 + n) % n; paint(); }
-    else if (e.key === "Enter") {
-      e.preventDefault();
-      if (n && sugg.active >= 0) pick(f, sugg.active);
-      else sendGuess();
-    } else if (e.key === "Escape") hideSuggestions();
-  });
-});
+const boxes = {
+  title: suggestBox({ input: $("g-title"), list: $("s-title"), options: () => options.title, onPick: (o) => pick("title", o), onEnter: sendGuess }),
+  artist: suggestBox({ input: $("g-artist"), list: $("s-artist"), options: () => options.artist, onPick: (o) => pick("artist", o), onEnter: sendGuess }),
+};
+function hideSuggestions() { Object.values(boxes).forEach((b) => b.hide()); }
 
 // ---------------- Misc ----------------
 
@@ -428,11 +380,6 @@ $("buzzBtn").addEventListener("pointerdown", (e) => { e.preventDefault(); buzz()
 $("buzzBtn").addEventListener("click", buzz);
 // A tap that started on a suggestion can still end up here on some phones; ignore it.
 $("sendBtn").onclick = () => { if (Date.now() - pickedAt > 400) sendGuess(); };
-document.addEventListener("pointercancel", () => (pressing = false));
-document.addEventListener("pointerup", (e) => {
-  const t = /** @type {any} */ (e.target);
-  if (!t.closest || !t.closest(".suggestions")) pressing = false;
-});
 $("leaveBtn").onclick = leave;
 $("moreVote").onclick = () => vote("more");
 $("giveupVote").onclick = () => vote("giveup");

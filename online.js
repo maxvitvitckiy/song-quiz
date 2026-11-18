@@ -7,6 +7,7 @@
 // Votes: more than half the players asking for "Hear more" plays the longer clip,
 // everyone pressing "Give up" reveals the song. The host's own buttons skip the vote.
 // Audio plays on the host only (stream it to your friends, e.g. over Discord).
+// The game itself runs in app.js; this file follows it through the events on `game` (state.js).
 
 const PING_MS = 4000, DROP_MS = 13000;   // a phone that's silent this long counts as offline
 const CODE_KEY = "guess-the-song-room";
@@ -27,7 +28,6 @@ const net = {
   code: /** @type {string | null} */ (null),
   opening: false,
   players: /** @type {RoomPlayer[]} */ ([]),
-  phase: /** @type {Phase} */ ("lobby"),
   buzzer: /** @type {string | null} */ (null),   // name of the player who is answering
   deadline: 0,
   timer: null,
@@ -37,8 +37,11 @@ const net = {
   votes: { more: /** @type {Set<string>} */ (new Set()), giveup: /** @type {Set<string>} */ (new Set()) }, // names voting for "Hear more" / "Give up"
 };
 
-const isOnline = () => state.mode === "online";
 const onlinePicked = () => pickedMode() === "online";
+
+// What the phones see. A room can stay open during a party or solo game; its phones wait in the lobby.
+/** @returns {Phase} */
+const roomPhase = () => (isOnline() ? state.phase : "lobby");
 
 // ---------------- Room ----------------
 
@@ -99,7 +102,7 @@ function acceptConnection(conn) {
     if (!p) return;
     p.online = false;
     renderRoomPlayers();
-    if (!$("game").classList.contains("hidden")) renderScores();
+    if (onGameScreen()) renderScores();
     netBroadcast();
     checkVotes();
   });
@@ -121,7 +124,7 @@ function heartbeat() {
   });
   if (!changed) return;
   renderRoomPlayers();
-  if (!$("game").classList.contains("hidden")) { renderScores(); renderBuzz(); }
+  if (onGameScreen()) { renderScores(); renderBuzz(); }
   netBroadcast();
   checkVotes();
 }
@@ -161,10 +164,10 @@ function onHello(conn, msg) {
   }
   p.seen = Date.now();
   send(conn, Msg.welcome(p.name, net.code));
-  if (net.phase !== "lobby") send(conn, optionsMessage());
+  if (roomPhase() !== "lobby") send(conn, optionsMessage());
   renderRoomPlayers();
   updateStartButton();
-  if (!$("game").classList.contains("hidden")) renderScores();
+  if (onGameScreen()) renderScores();
   netBroadcast();
 }
 
@@ -185,7 +188,7 @@ function kick(p) {
 
 /** @param {RoomPlayer} p */
 function onBuzz(p) {
-  if (net.phase !== "open" || state.revealed || net.buzzer || net.frozen.has(p.name)) return netBroadcast();
+  if (roomPhase() !== "open" || net.buzzer || net.frozen.has(p.name)) return netBroadcast();
   net.buzzer = p.name;
   net.deadline = Date.now() + ANSWER_SECONDS * 1000;
   stopAudio();
@@ -240,8 +243,7 @@ function onGuess(p, msg) {
 
 // ---------------- Voting: "Hear more" and "Give up" ----------------
 
-const canHearMore = () => state.step < state.steps.length - 1;
-const votingOpen = () => net.phase === "open" && !state.revealed;
+const votingOpen = () => roomPhase() === "open";
 
 // While a player is answering, "Hear more" and "Give up" are locked for everyone:
 // the host's buttons and keys, and the players' vote buttons.
@@ -295,66 +297,41 @@ function everyoneFrozen() {
   return here.length > 0 && here.every((p) => net.frozen.has(p.name));
 }
 
-// ---------------- Hooks called from app.js ----------------
+// ---------------- Following the game (events from app.js, see state.js) ----------------
 
-function netOnStart() {
-  net.frozen.clear();
-  clearVotes();
-  net.last = null;
-  net.buzzer = null;
-  netBroadcastAll(optionsMessage());
-}
+// The phones get the suggestion lists for the new game.
+game.on("start", () => { if (isOnline()) netBroadcastAll(optionsMessage()); });
 
-function netOnRound() {
-  clearTimeout(net.timer);
-  stopTicker();
-  net.phase = "waiting";
-  net.buzzer = null;
-  net.frozen.clear();
-  clearVotes();
-  net.last = null;
-  hostInputs(false);
+game.on("phase", (phase) => {
+  if (!isOnline()) return;
+  // Outside an open clip nobody can be answering.
+  if (phase !== "open") {
+    clearTimeout(net.timer);
+    stopTicker();
+    net.buzzer = null;
+  }
+  // A new round: everyone can buzz again, votes and the last guess are cleared.
+  if (phase === "waiting") {
+    net.frozen.clear();
+    clearVotes();
+    net.last = null;
+    hostInputs(false);
+  }
   renderBuzz();
   netBroadcast();
-}
-
-function netOnPlayed() {
-  if (net.phase === "waiting") net.phase = "open";
-  renderBuzz();
-  netBroadcast();
-}
+});
 
 // "Hear more" (the host's button or a passed vote) unfreezes everyone and starts a
 // new "Hear more" vote. Give-up votes stay. Anyone still answering keeps their turn.
-function netOnHearMore() {
+game.on("hearMore", () => {
+  if (!isOnline()) return;
   net.frozen.clear();
   net.votes.more.clear();
   renderBuzz();
   netBroadcast();
-}
+});
 
-function netOnReveal() {
-  clearTimeout(net.timer);
-  stopTicker();
-  net.phase = "reveal";
-  net.buzzer = null;
-  renderBuzz();
-  netBroadcast();
-}
-
-function netOnEnd() {
-  clearTimeout(net.timer);
-  stopTicker();
-  net.phase = "end";
-  net.buzzer = null;
-  netBroadcast();
-}
-
-function netOnSetup() {
-  net.phase = "lobby";
-  net.buzzer = null;
-  netBroadcast();
-}
+game.on("scores", () => { if (isOnline()) netBroadcast(); });
 
 // ---------------- Messages to players ----------------
 
@@ -366,7 +343,8 @@ function optionsMessage() {
 /** @returns {StateMsg} */
 function stateMessage() {
   const t = state.current;
-  const inGame = net.phase !== "lobby";
+  const phase = roomPhase();
+  const inGame = phase !== "lobby";
   /** @type {StateMsg["solved"]} */
   const solved = { title: null, artist: null };
   FIELDS.forEach((f) => {
@@ -377,7 +355,7 @@ function stateMessage() {
   return {
     t: "state",
     code: net.code,
-    phase: net.phase,
+    phase,
     round: state.round,
     total: state.queue.length,
     pts: inGame ? pointsForStep(state.step) : 0,
@@ -390,7 +368,7 @@ function stateMessage() {
     solved,
     last: net.last,
     players: net.players.map((p) => ({ name: p.name, score: p.score, online: p.online })),
-    answer: (net.phase === "reveal" || net.phase === "end") && t ? { title: t.fullTitle || t.title, artist: t.artist, cover: t.cover, from: playlistLabel(t) } : null,
+    answer: (phase === "reveal" || phase === "end") && t ? { title: t.fullTitle || t.title, artist: t.artist, cover: t.cover, from: playlistLabel(t) } : null,
   };
 }
 
@@ -447,7 +425,7 @@ function hostInputs(show) {
 
 function renderBuzz() {
   if (!isOnline()) return;
-  $("moreBtn").disabled = !state.played || !canHearMore() || !!net.buzzer;
+  $("moreBtn").disabled = state.phase !== "open" || !canHearMore() || !!net.buzzer;
   $("revealBtn").disabled = !!net.buzzer;
   const now = $("buzzNow");
   now.className = "buzz-now";
@@ -455,19 +433,18 @@ function renderBuzz() {
     const secs = Math.max(0, Math.ceil((net.deadline - Date.now()) / 1000));
     now.textContent = `🔔 ${net.buzzer} is answering… ${secs}s`;
     now.classList.add("live");
-  } else if (net.phase === "waiting") {
+  } else if (state.phase === "waiting") {
     now.textContent = "Press Play. Buzzers open when the clip starts.";
-  } else if (net.phase === "open") {
+  } else if (state.phase === "open") {
     if (everyoneFrozen()) {
-      const more = state.step < state.steps.length - 1;
-      now.textContent = more ? "Everyone is frozen. Press Hear more to unfreeze." : "Everyone is frozen and this is the longest clip. Give up to reveal.";
+      now.textContent = canHearMore() ? "Everyone is frozen. Press Hear more to unfreeze." : "Everyone is frozen and this is the longest clip. Give up to reveal.";
       now.classList.add("warn");
     } else now.textContent = "Buzzers are open";
   } else now.textContent = "";
 
   const v = voteCount();
   const votes = $("buzzVotes");
-  const showVotes = net.phase === "open" && v.players > 0 && (v.more || v.giveup);
+  const showVotes = state.phase === "open" && v.players > 0 && (v.more || v.giveup);
   votes.textContent = !showVotes ? "" : [
     canHearMore() ? `🔊 Hear more ${v.more}/${v.moreNeed}` : "",
     `🏳 Give up ${v.giveup}/${v.giveupNeed}`,

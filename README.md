@@ -3,6 +3,8 @@
 A small party game: it plays short clips from Deezer's public 30-second song previews,
 and you try to name the song before the others.
 
+Everything it can do, for players and under the hood: [FEATURES.md](FEATURES.md).
+
 ## Run it
 
 Just open `index.html` in your browser (double-click it).
@@ -120,12 +122,15 @@ The site needs no build step: the files in this folder are the site. To check a 
 
 ```bash
 npm install      # once
-npm test         # unit tests for answer matching, scoring and playlists (tests/)
+npm test         # unit tests for answer matching, scoring, playlists and game phases (tests/)
 npm run check    # type check: catches misspelt names and fields across files
 ```
 
 - `match.js` and `rules.js` hold the game's rules and touch nothing on the page, so `tests/` runs them in Node.
   When a guess is judged wrong (or right) by mistake, add that case to `tests/rules.test.js` first.
+- `state.js` holds the host's game state and its phases (setup, waiting for the clip, open, answer, end).
+  `app.js` runs the game and announces each change; `online.js` follows those announcements to keep the phones in step.
+- `ui.js` has what both pages share, like the suggestion list under the guess boxes.
 - Every message between the host and the phones is listed at the top of `net.js`, with a helper to build each one.
   Change a message there, and `npm run check` points at every place on both sides that has to follow.
 - `index.html` and `play.html` load their scripts into one shared scope each, so they're checked separately
