@@ -240,7 +240,7 @@ function renderVotes(s, mine) {
     // first node is the label text, last is the <small> count
     b.firstChild.textContent = label;
     b.lastChild.textContent = open && can ? `${v[kind].length} / ${need}` : "";
-    b.disabled = !open || !can;
+    b.disabled = !open || !can || !!s.buzzer;   // locked while someone answers
     b.classList.toggle("on", on && open);
     b.setAttribute("aria-pressed", String(on && open));
   };
@@ -249,7 +249,7 @@ function renderVotes(s, mine) {
 }
 
 function vote(kind) {
-  if (!view || view.phase !== "open") return;
+  if (!view || view.phase !== "open" || view.buzzer) return;
   const list = (view.votes && view.votes[kind]) || [];
   const on = !list.includes(me.name);
   // Show the tap right away; the host's next update has the real count.

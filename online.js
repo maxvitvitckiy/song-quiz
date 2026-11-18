@@ -231,9 +231,13 @@ function onGuess(p, msg) {
 const canHearMore = () => state.step < state.steps.length - 1;
 const votingOpen = () => net.phase === "open" && !state.revealed;
 
+// While a player is answering, "Hear more" and "Give up" are locked for everyone:
+// the host's buttons and keys, and the players' vote buttons.
+const someoneAnswering = () => isOnline() && !!net.buzzer;
+
 function onVote(p, msg) {
   const kind = msg.kind === "more" ? "more" : msg.kind === "giveup" ? "giveup" : null;
-  if (!kind || !votingOpen() || (kind === "more" && !canHearMore())) return netBroadcast();
+  if (!kind || !votingOpen() || net.buzzer || (kind === "more" && !canHearMore())) return netBroadcast();
   if (msg.on) net.votes[kind].add(p.name);
   else net.votes[kind].delete(p.name);
   renderBuzz();
@@ -428,6 +432,8 @@ function hostInputs(show) {
 
 function renderBuzz() {
   if (!isOnline()) return;
+  $("moreBtn").disabled = !state.played || !canHearMore() || !!net.buzzer;
+  $("revealBtn").disabled = !!net.buzzer;
   const now = $("buzzNow");
   now.className = "buzz-now";
   if (net.buzzer) {

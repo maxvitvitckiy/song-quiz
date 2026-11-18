@@ -348,7 +348,7 @@ function updateStepUI(played) {
   $("playBtn").textContent = played ? `↺ Replay ${s}s` : `▶ Play ${s}s`;
   const next = state.steps[state.step + 1];
   $("moreBtn").textContent = next ? `Hear more (${next}s)` : "Hear more";
-  $("moreBtn").disabled = !played || !next;
+  $("moreBtn").disabled = !played || !next || someoneAnswering();
   $("skipBtn").textContent = next ? `Skip (+${next - s}s)` : "Give up";
 }
 
@@ -366,7 +366,7 @@ async function play() {
 }
 
 async function hearMore() {
-  if (state.revealed || state.step >= state.steps.length - 1) return;
+  if (state.revealed || state.step >= state.steps.length - 1 || someoneAnswering()) return;
   state.step++;
   if (isOnline()) netOnHearMore();
   await play();
@@ -500,7 +500,7 @@ function finishRound() {
 }
 
 function giveUp() {
-  if (state.revealed) return;
+  if (state.revealed || someoneAnswering()) return;
   if (state.pending) award(null);
   finishRound();
 }
